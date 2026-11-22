@@ -12,3 +12,12 @@ die()  { printf '[%s] ERROR: %s\n' "$(date +%H:%M:%S)" "$*" >&2; printf 'log: %s
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed (scripts/wsl-setup.sh --install)"; }
 trap 'die "line $LINENO: \"$BASH_COMMAND\" failed"' ERR
 say "log: $LOG"
+apply_patches() {  # apply_patches TREE PATCHDIR: each patch applied once; a patch that neither applies nor is applied stops
+	local tree=$1 dir=$2 patch
+	for patch in "$dir"/*.patch; do
+		[ -e "$patch" ] || continue
+		if git -C "$tree" apply --check "$patch" 2>/dev/null; then git -C "$tree" apply "$patch"; say "applied $(basename "$patch")"
+		elif git -C "$tree" apply --check -R "$patch" 2>/dev/null; then say "already applied: $(basename "$patch")"
+		else die "$(basename "$patch") neither applies to $tree nor is applied: the pin moved; refresh the patch"; fi
+	done
+}

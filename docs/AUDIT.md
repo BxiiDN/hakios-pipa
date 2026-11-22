@@ -40,3 +40,12 @@
 - Mesa Freedreno/Turnip: mendukung A650 di Linux; HakiOS memakai Mesa di Darwin untuk A660. Porting profil A650
   belum dilakukan.
 - UniXNU-pipa (fork `BxiiDN/UniXNU-pipa`): proyek lain yang sudah menargetkan pipa; tidak diaudit di sesi ini.
+
+## Sesi 2 (23 Nov 2026)
+
+- UniXNU `8542980`, EsaiJJ/UniXNU-pipa `c4c1a3a` (branch `pipa`), xVanTuring/UniXNU-pipa `cdb3d62`,
+  BxiiDN/ios-pipa `830ec1c`, xVanTuring/uefi-pipa `1f6a152` (branch `pipa`) diaudit: [BASE-DECISION.md](BASE-DECISION.md).
+- cpufreq SM8250 = EPSS menurut tree downstream dan mainline (koreksi terhadap catatan OSM HakiOS).
+- Upstream `62e09f8`: penyebab dua test gagal dan perbaikannya: [UPSTREAM-TESTS.md](UPSTREAM-TESTS.md).
+- Klaim chip touch berbeda antar repo (NT36532 di UniXNU-pipa dan tree live `NVT-ts-spi`; NT36523 di README ios-pipa).
+  Tree tidak menyebut nomor chip; UniXNU-pipa membaca chip id lewat SPI dan firmware stock `novatek_nt36532_*`.

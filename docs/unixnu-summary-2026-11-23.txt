@@ -1,0 +1,23 @@
+PASS     UniXNU-pipa check-pipa-board.py (8 GB / 256 GB)
+NOT RUN  UniXNU-pipa A650GmuTests: needs UniXNU kits/AdrenoFirmware (AdrenoHfiStartup.h) via unixnu fetch
+PASS     UniXNU-pipa ButtonsTests (gcc)
+PASS     UniXNU-pipa ButtonsTests (clang)
+PASS     UniXNU-pipa GpuPowerBoardTests (gcc)
+PASS     UniXNU-pipa GpuPowerBoardTests (clang)
+PASS     UniXNU-pipa NativeBatteryTests (gcc)
+PASS     UniXNU-pipa NativeBatteryTests (clang)
+PASS     UniXNU-pipa TouchBoardTests (gcc)
+PASS     UniXNU-pipa TouchBoardTests (clang)
+NOT RUN  UniXNU-pipa-reference A650GmuTests: needs UniXNU kits/AdrenoFirmware (AdrenoHfiStartup.h) via unixnu fetch
+PASS     UniXNU-pipa-reference ButtonsTests (gcc)
+PASS     UniXNU-pipa-reference ButtonsTests (clang)
+PASS     UniXNU-pipa-reference GesturesTests (gcc)
+PASS     UniXNU-pipa-reference GesturesTests (clang)
+PASS     UniXNU-pipa-reference GpuPowerBoardTests (gcc)
+PASS     UniXNU-pipa-reference GpuPowerBoardTests (clang)
+PASS     UniXNU-pipa-reference NativeBatteryTests (gcc)
+PASS     UniXNU-pipa-reference NativeBatteryTests (clang)
+PASS     UniXNU-pipa-reference TouchBoardTests (gcc)
+PASS     UniXNU-pipa-reference TouchBoardTests (clang)
+BLOCKED  UniXNU kernel: Linux toolchain (patched clang, cctools-port; scripts/linux/setup-toolchain.py) + Apple's IPSW inputs
+BLOCKED  uefi-pipa firmware: needs its Mu-Silicium build (setup_env.sh, pip requirements)

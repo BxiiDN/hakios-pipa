@@ -1,74 +1,66 @@
-# Dual boot Android/HyperOS + HakiOS di Xiaomi Pad 6
+# Dual boot Android/HyperOS + iPadOS 17 di Xiaomi Pad 6
 
-Status: **desain + validator offline. Belum diuji di tablet. Dual boot belum berhasil sampai kedua OS dilihat
-berjalan bergantian di Pad 6.**
+Status: **desain, konfigurasi dan pengujian offline. Belum diuji di tablet. Dual boot belum berhasil sampai Android
+dan iPadOS dilihat berjalan bergantian di Pad 6.** Sesi ini tidak mem-flash dan tidak mengubah partisi.
 
-## Mode 1 — RAM boot (default, dipakai sekarang)
+## Prinsip
 
-```
-Tablet dinyalakan biasa ──> ABL ──> Android/HyperOS (default, tidak berubah)
+1. Tablet dinyalakan biasa → ABL → Android/HyperOS. Tidak ada yang berubah di jalur ini.
+2. OS kedua selalu dimulai **dari RAM** (`fastboot boot`, `scripts/temp-boot.sh`), jadi reboot apa pun kembali ke
+   Android. Slot A/B tidak dipakai sebagai "dua OS": OTA virtual A/B menulis ke slot inaktif, dan
+   `tools/pipa_gpt.py` menolak rencana yang menulis ke sana.
+3. Boot manager adalah menu di image RAM itu sendiri: Android (default, timeout 10 s), iPadOS 17, Recovery/Fastboot.
 
-PC: fastboot boot build/hakios-pipa-bootmgr.img
-      └─> U-Boot dari RAM ──> Boot Manager (Vol+/Vol- pilih, Power konfirmasi, 10 s → Android)
-            1. Android / HyperOS      → reset → ABL boot Android seperti biasa
-            2. HakiOS (Darwin)        → loader.efi → XNU → Darwin, semuanya di RAM
-            3. Recovery / Fastboot    → reset sambil tahan Vol+ (recovery) atau Vol- (fastboot)
-```
+## Dua image, dua menu
 
-Yang dijamin oleh desain (dan dicek `tools/pipa_gpt.py` + `scripts/preflight.sh`): tidak ada partisi yang ditulis,
-slot A/B, `vbmeta`, `super`, `userdata`, OTA dan Recovery tidak tersentuh, reboot selalu kembali ke Android.
+| | iPadOS 17 (basis utama) | Riset Darwin HakiOS (jalur kedua) |
+| --- | --- | --- |
+| Image | uefi-pipa + payload UniXNU (`./unixnu bootimg`) | U-Boot hakios-uefi + `loader.efi` (`scripts/build-uboot.sh`) |
+| Menu | menu UniXNU (`\EFI\UniXNU\unixnu.toml`), dibuat `scripts/unixnu/payload.py` | `bootmenu` U-Boot (`board/xiaomi/pipa.env`) |
+| Android-first | `patches/unixnu/0001` + `patches/unixnu-pipa/0001` (`[payload.dualboot]`, `timeout = 10`) | `bootmenu_default=0`, `bootmenu_delay=10` |
+| Entri | 1 Android (reset) · 2 iPadOS 17.7.11 (`xnu`) · [Install and boot, dengan konfirmasi] · 3 Recovery/Fastboot (reset) · Restart · Power off | 1 Android (reset) · 2 HakiOS · 3 Recovery/Fastboot · shell · info |
+| Tombol | Vol+/Vol- = atas/bawah, Power = Enter (sesuai keymap firmware; belum dilihat) | `BUTTON_REMAP_PHONE_KEYS`: VOLUMEUP→UP, VOLUMEDOWN→DOWN, POWER→ENTER (dicek di source U-Boot) |
+| Timeout/default | `[boot] timeout`/`default`; entri dengan `confirm` tidak pernah dipilih oleh countdown | `bootmenu_delay`, `bootmenu_default` (dicek di `cmd/bootmenu.c`, `common/menu.c`) |
+| Uji offline | `tests/test_unixnu_menu.py` (5) | `tests/test_bootmgr_env.py` (10), `tools/check_uboot_config.py` (Kconfig U-Boot) |
 
-Batasan: menu hanya muncul jika dimulai dari PC; tidak ada menu saat cold boot; HakiOS tidak punya penyimpanan
-permanen. Entri Recovery/Fastboot bergantung pada ABL membaca tombol saat warm reset — belum diuji.
+## Handoff dan kegagalan
 
-## Mode 2 — menu saat tablet dinyalakan (belum, digerbang validator)
-
-Butuh mengganti `boot` di slot **aktif** dengan U-Boot yang bisa memuat boot image Android stock (header v3/v4,
-`vendor_boot`, AVB, bootconfig). Belum terbukti di pipa, sehingga `pipa_gpt.py check` memberi **BLOCKED** sampai
-`android_fallback_tested` diisi setelah jalur Android lewat U-Boot terlihat bekerja dari RAM, dan **FAIL** tanpa
-`backup_sha256` boot stock.
-
-Ditolak oleh validator, apa pun isi rencananya:
-- Slot inaktif (mis. `boot_b` saat aktif `a`): OTA virtual A/B memasang update di slot inaktif, jadi boot manager
-  di sana tertimpa, dan Android bisa mem-boot image yang tidak ia verifikasi. "A untuk Android, B untuk iPadOS"
-  tidak dipakai.
-- Firmware/kalibrasi (`xbl`, `abl`, `tz`, `modem`, `persist`, `modemst*`, `fsg`, …) dan partisi milik Android
-  (`super`, `userdata`, `metadata`, `vbmeta*`, `vendor_boot`, `dtbo`, `misc`, …).
-
-Sebelum OTA di mode 2: flash ulang boot stock yang dibackup (dilakukan pemilik, bukan skrip).
-
-## Penyimpanan
-
-| Opsi | Keadaan |
+| Keadaan | Apa yang terjadi |
 | --- | --- |
-| RAM saja | Sekarang. Aman; tidak ada yang tersimpan. |
-| microSD | Tidak tersedia: Pad 6 tidak punya slot. |
-| Drive USB-C (image APFS) | BLOCKED: HakiOS belum punya driver USB host untuk Darwin. |
-| Partisi internal khusus | Biasanya `userdata` mengisi LUN sampai akhir, jadi ruang = mengecilkan `userdata` = **menghapus semua data Android** (juga enkripsi FBE/metadata). `pipa_gpt.py` memberi BLOCKED, lalu FAIL tanpa `userdata_erase_confirmed` + `backup_verified`. |
-| File image di dalam `userdata` | Tidak layak: f2fs + FBE tidak bisa dibaca Darwin. |
+| Tidak ada tombol 10 s | entri Android → reset → ABL → Android |
+| Pilih iPadOS | DarwinBoot memuat `Payloads/kernel.macho` + `.adt` (+ trust cache), XNU 10063 |
+| Kernel panic | UniXNU-pipa: layar panic, lalu restart ke fastboot dengan log di ramoops (referensi xVanTuring) → `scripts/capture-boot-log.sh` di Android |
+| Hang tanpa log | tahan Power 10–15 s → Android |
+| Recovery / Fastboot | entri reset sambil menahan Vol+ (recovery) / Vol- (fastboot); ABL membaca tombol saat reset — **belum diuji**. Cara pasti tetap: matikan, Vol- + Power |
+| Image tidak diterima ABL | tablet tetap di fastboot; `fastboot reboot` |
 
-Kapasitas nyata (ukuran `userdata`, ruang kosong, sektor 4096 byte, alignment 1 MiB) dibaca dari tablet:
+## Penyimpanan iPadOS permanen
 
-```sh
-scripts/dump-gpt.sh ~/pipa-gpt          # Android rooted, hanya membaca (dd if=/dev/block/sdX), salinan ke PC
-python3 tools/pipa_gpt.py read ~/pipa-gpt/*.bin
-python3 tools/pipa_gpt.py simulate plans/ram-boot.json ~/pipa-gpt/*.bin
-```
+UniXNU-pipa meletakkan root iPadOS (volume OS + SystemOS) di **jendela `userdata` Android**
+(`board.toml [userdata] first_lba 0x293000 … last_lba 0x3b037fa`, `native-ufs-root=1`), dan menulisnya dengan
+`fastboot flash userdata` — itu **menghapus data Android**. Tidak dipakai.
 
-## Instalasi mode 1 (saat tablet siap diuji)
+Desain yang menjaga Android (belum dijalankan; butuh persetujuan dan backup):
 
-1. Backup data penting (meski mode 1 tidak menulis apa pun).
-2. `scripts/build.sh` lalu `scripts/build-uboot.sh` (butuh aarch64 gcc + flex).
-3. Tablet ke fastboot (Vol- + Power). `scripts/preflight.sh --device --gpt ~/pipa-gpt` harus **PREFLIGHT PASS**
-   (produk `pipa`, bootloader unlocked, tidak ada skrip yang menulis).
-4. `fastboot boot build/hakios-pipa-bootmgr.img`. Catat apa yang tampil.
-5. Pilih Android: harus kembali ke HyperOS dengan data utuh. Baru setelah itu coba HakiOS.
+1. Backup penuh (`scripts/backup-readiness.sh` + backup data milik pemilik, dipulihkan sekali sebagai uji).
+2. Ukuran `userdata` baru dan partisi `ipados` di akhir LUN 0 (sda), 1 MiB-aligned, dicek dulu:
+   `pipa_gpt.py check plans/<rencana>.json private/gpt/*.bin` → harus PASS dengan `userdata_erase_confirmed` dan
+   `backup_verified`. Mengecilkan `userdata` = format ulang `userdata` (FBE): **semua data Android hilang sekali**,
+   lalu dipulihkan dari backup.
+3. `board.toml [userdata]` UniXNU-pipa diarahkan ke LBA partisi `ipados` (bukan `userdata`), lalu image root ditulis
+   ke `ipados` saja. Android kembali memakai `userdata` yang lebih kecil.
+4. OTA Android tidak menyentuh partisi baru, tapi tool flash Xiaomi (`flash_all`) bisa menulis ulang GPT dan
+   menghapusnya: dokumentasikan sebelum update besar.
+
+Tanpa repartisi, iPadOS hanya bisa dicoba dengan root di RAM/initrd (keterbatasan ukuran; belum dievaluasi untuk
+17.7.11) atau di unit yang Android-nya boleh dihapus.
 
 ## Recovery plan
 
 | Keadaan | Tindakan |
 | --- | --- |
-| Hang / layar hitam di U-Boot atau HakiOS | Tahan Power ±10–15 s → reboot ke Android (tidak ada yang ditulis). |
-| Masuk fastboot | `fastboot reboot`. |
-| Mode 2 bootloop | `fastboot flash boot_<slot aktif> <backup stock>` dengan image yang hash-nya sama dengan `backup_sha256`. |
-| Android rusak | Fastboot ROM resmi yang **sama versinya** dengan yang terpasang, `flash_all_except_storage` (data tetap). Periksa `fastboot getvar anti` dulu: Xiaomi memakai anti-rollback; jangan flash versi lebih rendah. |
+| Hang di menu/iPadOS/HakiOS | Tahan Power 10–15 s → Android (tidak ada yang ditulis) |
+| Masuk fastboot | `fastboot reboot` |
+| Android tidak boot setelah percobaan RAM | Tidak seharusnya terjadi (tidak ada tulis). Cek `fastboot getvar current-slot`; boot normal |
+| Setelah repartisi (masa depan) | Fastboot ROM resmi versi **sama** (`flash_all` mengembalikan GPT stock, menghapus data) + pulihkan backup. Cek `fastboot getvar anti` (anti-rollback) |
+| Boot image rusak (mode flash masa depan) | `fastboot flash boot_<aktif> private/backup/<build>/boot_<aktif>.img`, hash sama dengan `SHA256SUMS` |

@@ -18,3 +18,4 @@ identity.bin
 /logs/
 __pycache__/
 /build/
+/private/

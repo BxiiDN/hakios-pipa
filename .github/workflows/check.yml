@@ -31,15 +31,13 @@ jobs:
           name: logs
           path: logs/
 
-  # The pinned kernel's own host tests. At 62e09f8 two of them fail upstream (links to arch/arm64/boot/uefi/, which
-  # that commit moved out), with or without this package: reported here, not hidden, and not blocking.
+  # The pinned kernel's own host tests, with pipa and patches/upstream/ applied: must pass.
   upstream-host-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
-      - name: Kernel at the pinned commit, pipa brought in, its tests
+      - name: Kernel at the pinned commit + patches/upstream, pipa brought in, its tests
         env:
           HAKIOS_WORK: ${{ runner.temp }}/hakios-work
         run: |
@@ -47,3 +45,19 @@ jobs:
           cd "$HAKIOS_WORK/hakios-xnu-kernel"
           python3 tools/device.py add --from "$GITHUB_WORKSPACE"
           workbench/run.sh
+
+  # The same tests on the kernel exactly as upstream has it (no patch, no pipa): the baseline. At 62e09f8 two of
+  # them fail upstream (docs/UPSTREAM-TESTS.md); reported, not blocking.
+  upstream-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: Pristine kernel at the pinned commit
+        env:
+          HAKIOS_WORK: ${{ runner.temp }}/hakios-work
+          HAKIOS_UPSTREAM_PATCHES: '0'
+        run: |
+          scripts/fetch-upstream.sh
+          cd "$HAKIOS_WORK/hakios-xnu-kernel" && workbench/run.sh

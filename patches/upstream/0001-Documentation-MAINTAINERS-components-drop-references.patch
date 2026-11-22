@@ -1,0 +1,108 @@
+From f086b453508624be9623b17bf7e6a6219d4bb50b Mon Sep 17 00:00:00 2001
+From: Abian <BxiiDN@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 23:57:54 +0800
+Subject: [PATCH] Documentation, MAINTAINERS, components: drop references to
+ arch/arm64/boot/uefi/
+
+62e09f8 moved the loader's firmware (arch/arm64/boot/uefi/, arch/arm64/boot/u-boot/) to the companion
+repository, but the documents, the LOADER entry of MAINTAINERS and the Mu-Silicium component still name
+those paths, so tools_test (check-links) and maintainers_test fail on a clean checkout. Point the
+documents at hakios-uefi, drop the MAINTAINERS pattern, and drop the Mu-Silicium pin whose file is gone.
+The lint's old-name check (the HackiOS banner of a6d538c) is left as it is.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Documentation/architecture.md | 4 ++--
+ Documentation/porting.md      | 6 +++---
+ MAINTAINERS                   | 1 -
+ arch/arm64/boot/README.md     | 3 ++-
+ components/upstream.dts       | 8 --------
+ 5 files changed, 7 insertions(+), 15 deletions(-)
+
+diff --git a/Documentation/architecture.md b/Documentation/architecture.md
+index 96a8795..f7f844d 100644
+--- a/Documentation/architecture.md
++++ b/Documentation/architecture.md
+@@ -36,7 +36,7 @@ stock fastboot ──"fastboot boot"──► UEFI
+ When the kernel is done, or panics, it returns to the loader, which still holds the phone's USB link.
+ A reboot brings Android back.
+ 
+-For the POCO X5 Pro's U-Boot path, see [the Redwood U-Boot build and console guide](../arch/arm64/boot/u-boot/README.md). U-Boot supplies the EFI environment and command shell; `loader.efi` still builds the XNU handoff.
++For the U-Boot path, see the companion firmware repository, [hakios-uefi](https://github.com/oosexgang/hakios-uefi), and its board porting guide. U-Boot supplies the EFI environment and command shell; `loader.efi` still builds the XNU handoff.
+ 
+ ## Three layers, three kinds of change
+ 
+@@ -181,7 +181,7 @@ against the scripts that fetch).
+ | Darwin itself (IPSW contents) | Apple's files are never redistributed. | Extracted on your machine from Apple's IPSW. |
+ | The phone's firmware (GPU, DSP, touch) | The vendor's; taken from the same phone it runs on. | `adb pull` from its Android. |
+ | theos (cctools linker, iPhoneOS SDK) | A third-party toolchain. The kernel can be linked with LLVM's own Mach-O tools instead, with the SDK's headers alone ([building.md](building.md)); the `darwin/` scripts need theos. | [theos.dev](https://theos.dev/docs/installation-linux) |
+-| The UEFI for a phone | A port of Mu-Silicium per device. | `arch/arm64/boot/uefi/` has the changes every port needs; a phone's own port is in its package. |
++| The UEFI for a phone | A port of Mu-Silicium per device, or U-Boot. | Kept outside this repository since the loader's companion repository was split off: [hakios-uefi](https://github.com/oosexgang/hakios-uefi) (U-Boot); a phone's own port is in its package. |
+ | **Renoir's resident loader, its recovery payload tool and the user-space root tree** | They live in the team's working tree (`darwin-renoir`), which has not been published. | Not available yet. `darwin/tools/boot26.py` and the `darwin/userland/*.sh` scripts need it. |
+ 
+ The last row is the gap between this repository and booting Renoir from a clean checkout.
+diff --git a/Documentation/porting.md b/Documentation/porting.md
+index 9d9fa52..96fc88b 100644
+--- a/Documentation/porting.md
++++ b/Documentation/porting.md
+@@ -88,9 +88,9 @@ Leave `features = <>;` (none) for now. Every key is explained in `arch/arm64/boo
+ 
+ The loader runs under a UEFI. Port Mu-Silicium for the phone: the platform package with the phone's
+ memory map, the UEFI drivers extracted from the phone's own firmware -- the first phone's package has a
+-whole port under `arch/arm64/boot/uefi/` on the `devices` branch, with its README -- and what every port needs,
+-in `arch/arm64/boot/uefi/` (`apply.sh PHONE_FILES` puts both into a clone): the two changes in
+-`arch/arm64/boot/uefi/mu-silicium.patch`:
++whole port on the `devices` branch, with its README -- and what every port needs: the two changes below, which
++were kept in this repository until the loader's firmware moved to the companion
++repository [hakios-uefi](https://github.com/oosexgang/hakios-uefi) (which, as of this writing, carries the U-Boot path):
+ 
+ - the boot shim copies the payload that follows the UEFI image to a reserved address;
+ - the boot manager starts the loader from it instead of showing a menu.
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 24c72ee..38bdaa7 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -232,7 +232,6 @@ LOADER
+ F:	arch/arm64/boot/loader.c
+ F:	arch/arm64/boot/efi.h
+ F:	arch/arm64/boot/src/
+-F:	arch/arm64/boot/uefi/
+ F:	arch/arm64/boot/build.sh
+ F:	bench
+ F:	build.config.bench
+diff --git a/arch/arm64/boot/README.md b/arch/arm64/boot/README.md
+index 2b383a4..012c7c3 100644
+--- a/arch/arm64/boot/README.md
++++ b/arch/arm64/boot/README.md
+@@ -105,7 +105,8 @@ reads the battery through them.
+ ## Where it runs
+ 
+ Under a UEFI started with `fastboot boot`: [Mu-Silicium](https://github.com/Project-Silicium/Mu-Silicium)
+-on the phones (`arch/arm64/boot/uefi/` has the two changes the UEFI needs, and a phone's package its own port), stock firmware
++on the phones (the two changes the UEFI needs are described in Documentation/porting.md, step 2; the firmware lives in
++[hakios-uefi](https://github.com/oosexgang/hakios-uefi), and a phone's package has its own port), stock firmware
+ under QEMU.
+ 
+ ## What it writes to the phone's storage
+diff --git a/components/upstream.dts b/components/upstream.dts
+index 97e6ce7..345ebb5 100644
+--- a/components/upstream.dts
++++ b/components/upstream.dts
+@@ -102,14 +102,6 @@
+ 		note = "not fetched by this repository: install it as theos documents";
+ 	};
+ 
+-	mu-silicium {
+-		what = "the UEFI the loader runs under, ported per phone";
+-		source = "https://github.com/Project-Silicium/Mu-Silicium";
+-		pins = "e51cd877e31c8fbb322032dc4cb6715e83d25ad3";
+-		pinned-in = "arch/arm64/boot/uefi/BASE";
+-		used-for = "UEFI ports (arch/arm64/boot/uefi; a phone's platform is in its device package)";
+-		licence = "BSD-2-Clause-Patent";
+-	};
+ 
+ 	mesa {
+ 		what = "freedreno and the AIR-to-NIR shader frontend patches, for OpenGL ES and Metal on the Adreno";
+-- 
+2.43.0
+

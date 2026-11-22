@@ -2,8 +2,8 @@
 
 ## Kesimpulan
 
-Basis HakiOS saat ini **tidak bisa** menjalankan iPadOS 17 tanpa porting kernel besar. Status: **BLOCKED**
-(keputusan arsitektur dibutuhkan, lihat pilihan di bawah).
+Basis HakiOS saat ini **tidak bisa** menjalankan iPadOS 17 tanpa porting kernel besar. **Diputuskan (sesi 2):
+opsi 3, UniXNU-pipa**, yang memakai `xnu-10063.141.1` untuk iPadOS 17.7.11: [BASE-DECISION.md](BASE-DECISION.md).
 
 | | Versi Darwin | XNU |
 | --- | --- | --- |

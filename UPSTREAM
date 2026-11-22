@@ -5,3 +5,15 @@ UEFI_REPOSITORY=https://github.com/oosexgang/hakios-uefi
 LINUX_REPOSITORY=https://github.com/torvalds/linux
 LINUX_REF=4843f6873f7c4835e62f2c73ba0fd538e57a2f22
 UEFI_REF=93e98ee8f8b9ca42f43dbbfd91b10566ba8d328c
+# iPadOS 17 base (docs/BASE-DECISION.md): UniXNU with the pipa device repository; uefi-pipa is its firmware.
+UNIXNU_REPOSITORY=https://github.com/UniXNU/UniXNU
+UNIXNU_REF=8542980d02b4d2cc5c32ee3542de1760b2562aac
+PIPA_PORT_REPOSITORY=https://github.com/EsaiJJ/UniXNU-pipa
+PIPA_PORT_REF=c4c1a3a26cd45f75a718267f5ba77b2bc8ff4415
+PIPA_REFERENCE_REPOSITORY=https://github.com/xVanTuring/UniXNU-pipa
+PIPA_REFERENCE_REF=cdb3d62771e31d48d832853ee0c90964346d78da
+UEFI_PIPA_REPOSITORY=https://github.com/xVanTuring/uefi-pipa
+UEFI_PIPA_REF=1f6a1520f84c699a6f748e7b0b0ee72b79c7997b
+# iPadOS 17.7.11 (21H461) is built on this XNU (UniXNU profiles/os/ipados-17.7.11-21H461/profile.toml)
+XNU_TAG=xnu-10063.141.1
+XNU_REF=d8b80295118ef25ac3a784134bcf95cd8e88109f

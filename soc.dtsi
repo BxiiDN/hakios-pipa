@@ -67,9 +67,9 @@
 	// SM7325, SC7280 and every chip after them, the OSM's firmware before it (SDM845, SM8150, SM8250, SC7180,
 	// SM6350, SM7225). The node is qcom,cpufreq-epss or qcom,cpufreq-hw (the vendor's qcom,cpufreq-hw-epss or
 	// qcom,cpufreq-hw); tools/boards.py new --dts reads it, the layout with it.
-	// Linux mainline describes this block as "qcom,sm8250-cpufreq-epss" (arch/arm64/boot/dts/qcom/sm8250.dtsi), which
-	// is what was read here; HakiOS's Documentation/chipsets.md lists the SM8250 with the OSM's layout. Which one the
-	// hardware answers to is to be seen on the tablet with the driver's look-only level before cpufreq-epss is listed.
+	// EPSS: Linux mainline says "qcom,sm8250-cpufreq-epss" (sm8250.dtsi) and the tablet's own Android tree
+	// "qcom,cpufreq-hw-epss" (docs/HARDWARE-FACTS.md); HakiOS's Documentation/chipsets.md, which lists the SM8250 with
+	// the OSM's layout, is the odd one out. Still to be seen with the driver's look-only level before it is listed.
 	cpufreq {
 		epss = <0x18591000>;            // the first of its "freq-domainN" regs
 		epss-domain-size = <0x1000>;    // their size (at least 0x324 for EPSS, 0x924 for the OSM), and the distance

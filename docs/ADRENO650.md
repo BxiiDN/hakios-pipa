@@ -1,0 +1,40 @@
+# Adreno 650: status dan rencana
+
+**Status: tidak ada akselerasi GPU yang terbukti di unit pemilik.** Jalur utama ada di basis UniXNU-pipa.
+
+## Konstanta yang dicek (`tools/a650_check.py`, dari source)
+
+| Nilai | Linux `a6xx_catalog.c` | UniXNU-pipa `A650Gmu.h` | Tree live | HakiOS |
+| --- | --- | --- | --- | --- |
+| Chip id | 0x06050002, `ADRENO_6XX_GEN3` | 0x06050002 | 0x06050002 | — |
+| Chip id untuk GMU | rumus `a6xx_gmu_fw_start` → 0x06050200 | — | — | `adreno642_gmu_chip_id` → 0x06050200 (sama untuk chip ini) |
+| Firmware | `a650_sqe.fw`, `a650_gmu.bin`, `a650_zap.mdt` | `a650_*` dari `/vendor/firmware` | zap `a650_zap.mbn` (mainline) | **`a660_*`** |
+| GMEM | 1 MiB + 128 KiB | — | — | dari board (`gmem-kb`) |
+| `prim_fifo_threshold` | 0x00300200 | — | — | dari board |
+| GMU block | — | 0x3d6a000 (+RSCC 0x3de0000, PDC 0xb290000) | 0x3d6a000 | — |
+
+Hasil: chip id dan rumus GMU sepakat; **HakiOS hanya meminta firmware A660 → GAP** (dicatat oleh `build.sh`).
+
+## Kenapa driver HakiOS tidak bisa dipakai langsung
+
+A650 adalah `ADRENO_6XX_GEN3`; driver HakiOS ditulis untuk `GEN4` (keluarga A660). Di Linux `a6xx_gpu.c`, cabang
+khusus `adreno_is_a660_family` ada di baris 1310, 1386, 1709, 1988; cabang `a650_family` di 768, 1251, 1279, 1299,
+1364; `a6xx_gmu.c`: 700, 739, 789, 889, 954, 2371–2448. Plus tabel `a650_hwcg`, `a650_protect`, `a640_gbif`,
+`gmu_cgc_mode 0x00020202`. Port A650 ke HakiOS = memisahkan langkah-langkah itu per keluarga. Tidak dikerjakan di
+sesi ini: tidak bisa diuji tanpa hardware, dan basis iPadOS 17 yang dipilih sudah punya driver A650.
+
+## Jalur UniXNU-pipa (basis yang dipilih)
+
+| Target | Komponen | Bukti |
+| --- | --- | --- |
+| 1. Inisialisasi GPU | `package/GpuProbe.cpp` mode 6 (CX, SMMU GPU, command DB, clock GMU 200 MHz) | host test `GpuPowerBoardTests` PASS di sini; klaim tablet xVanTuring 24 Okt |
+| 2. Firmware GMU | `package/A650Gmu.c` mode 7 (urutan a650 Linux v6.6, HFI) | `A650GmuTests` NOT RUN di sini |
+| 3. Command submission | `drivers/Adreno650` + `kits/AdrenoPM4` | belum diuji |
+| 4. Memori GPU, 5. SMMU | `kits/ArmSmmu4K` (stream 5 / 0x405 ke bank 1) | belum diuji |
+| 6. Sinkronisasi | `AdrenoMetal` shared events/fences | belum diuji |
+| 7. Rendering hardware, 8. Metal | `AdrenoMetal` → Vulkan (Turnip) | klaim 40–54 fps (unit 16 GB), belum diuji di sini |
+| 9. WindowServer, 10. kompositing SpringBoard | backboardd/CoreAnimation lewat Metal plugin, salinan GPU ke framebuffer | klaim; sudut bulat salah di pass GMEM |
+
+Membedakan GPU nyata dari software rendering di tablet (langkah Claude Code): log kernel `gpu:` (mode 7: firmware
+GMU 0x20010008, HFI ready, 4 pesan startup), `NativeAdreno` terpublikasi, dan tanpa file publish plugin UI kembali
+dirender CPU — bandingkan fps keduanya. Sampai itu terlihat di unit pemilik: **NOT TESTED**.

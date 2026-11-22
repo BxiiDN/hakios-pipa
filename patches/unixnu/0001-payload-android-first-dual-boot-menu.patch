@@ -1,0 +1,56 @@
+diff --git a/scripts/unixnu/dualboot.py b/scripts/unixnu/dualboot.py
+new file mode 100644
+index 0000000..b7e9200
+--- /dev/null
++++ b/scripts/unixnu/dualboot.py
+@@ -0,0 +1,29 @@
++"""Dual boot with Android: the payload's menu made Android-first.
++
++board.toml [payload.dualboot] (all optional):
++  android_title   = "Android / HyperOS"
++  recovery_title  = "Recovery or Fastboot (hold Vol+ or Vol- while it restarts)"
++With the table present, the generated \\EFI\\UniXNU\\unixnu.toml gets an "android" entry first (action reset: the
++stock bootloader then starts Android as on any power-on, since the boot image was only RAM-booted), becomes the
++default, so the countdown ([payload] timeout) ends in Android; the OS entries keep their order after it, then a
++recovery entry (also a reset, for the user to hold a key), then Restart and Power off as before.
++Without the table nothing changes.
++"""
++import json
++
++
++def apply_dual_boot(config, dualboot):
++    if not dualboot:
++        return config
++    if 'default = "xnu"\n' not in config or '[[entry]]\nid = "reset"\n' not in config:
++        raise ValueError('dual boot: the payload menu is not in the form this change knows')
++    android = (f'[[entry]]\nid = "android"\ntitle = {json.dumps(dualboot.get("android_title", "Android / HyperOS"))}\n'
++               'type = "action"\naction = "reset"\n')
++    recovery = (f'[[entry]]\nid = "recovery"\n'
++                f'title = {json.dumps(dualboot.get("recovery_title", "Recovery or Fastboot (hold Vol+ or Vol- while it restarts)"))}\n'
++                'type = "action"\naction = "reset"\n')
++    config = config.replace('default = "xnu"\n', 'default = "android"\n', 1)
++    first = config.index('[[entry]]\n')
++    config = config[:first] + android + config[first:]
++    reset = config.index('[[entry]]\nid = "reset"\n')
++    return config[:reset] + recovery + config[reset:]
+diff --git a/scripts/unixnu/payload.py b/scripts/unixnu/payload.py
+index 63c8769..9fab248 100644
+--- a/scripts/unixnu/payload.py
++++ b/scripts/unixnu/payload.py
+@@ -17,6 +17,7 @@ import tempfile
+ from pathlib import Path
+ 
+ from . import kernel as kernel_step
++from .dualboot import apply_dual_boot
+ from .util import Error, expand, log, run, sha256_file, tool
+ 
+ EPOCH = 315532800   # 1980-01-01, the first FAT timestamp; keeps the volume reproducible
+@@ -268,6 +269,8 @@ def build(ctx, kernel=None):
+                '[[entry]]\nid = "shutdown"\ntitle = "Power off"\ntype = "action"\naction = "shutdown"\n')
+     if spec.get('tools'):
+         config += ('[[entry]]\nid = "tools"\ntitle = "Tools"\ntype = "action"\naction = "tools"\n')
++    # Android first and default when board.toml has [payload.dualboot] (dualboot.py)
++    config = apply_dual_boot(config, spec.get('dualboot'))
+     (stage / 'EFI/UniXNU/unixnu.toml').write_text(config)
+     for path in [stage, *stage.rglob('*')]:
+         os.utime(path, (EPOCH, EPOCH))
