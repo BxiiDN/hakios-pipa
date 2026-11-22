@@ -20,11 +20,11 @@ Dua status terpisah, tidak pernah disamakan:
 | UniXNU-pipa board check + 18 host test driver | PASS | `logs/unixnu-summary.txt` |
 | Loader UEFI HakiOS reproducible | PASS | SHA-256 sama dua build |
 | `git diff --check` (tree ter-commit + kerja) | PASS setelah commit sesi 3 | `scripts/build.sh` |
-| Kompilasi U-Boot | **BLOCKED** (tidak ada `aarch64-linux-gnu-gcc`/`flex`; instalasi dan build tool dari source ditolak lingkungan sesi). Skrip siap: dua build bersih, simbol, `.config`, env terkompilasi, DTB | `scripts/build-uboot.sh` |
+| Kompilasi U-Boot pipa (GitHub Actions, gcc 13.3, flex 2.6.4), dua build bersih | **PASS**: `u-boot.bin` `f6faf8e0…` (1 526 152 B), `u-boot` ELF `6bb971b1…`, DTB pipa `7c3faf93…`, image `hakios-pipa-bootmgr.img` `fa2c0951…` (776 192 B, header v1, page 2048); kedua build identik; tidak ada unresolved symbol; `.config`, env menu terkompilasi, DTB `xiaomi,pipa` dicek. **Menu belum dilihat di tablet** | [run 45073781629](https://github.com/BxiiDN/hakios-pipa/actions/runs/45073781629) |
 | Kernel XNU 10063, firmware uefi-pipa, payload, boot image | **BLOCKED** | [XNU-BUILD.md](XNU-BUILD.md) |
 | `A650GmuTests` | **NOT RUN** (butuh `kits/AdrenoFirmware`; menjalankannya ditolak pengaman sesi 2, tidak diulang) | — |
 | QEMU | **BLOCKED** (tidak ada kernel, tidak ada qemu) | — |
-| GitHub Actions | ditulis ulang tanpa `|| true` / `continue-on-error`; **belum pernah jalan** (repo belum di GitHub) | `.github/workflows/` |
+| GitHub Actions | PASS (offline, upstream-tests sebagai root + init_test non-root yang dikenal, upstream-baseline) | [run 45073781629](https://github.com/BxiiDN/hakios-pipa/actions/runs/45073781629) |
 
 ## Matriks kompatibilitas (tidak ada yang diuji di Pad 6)
 
@@ -44,7 +44,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Thermal / power | NOT TESTED | — |
 | Tombol | PARTIAL | Host test PASS |
 | Storage UFS | PARTIAL | Root dipindah ke `ipados`; menurut source tidak ada tulis ke `userdata` |
-| U-Boot | PARTIAL | Konfigurasi PASS; kompilasi BLOCKED |
+| U-Boot | PARTIAL | Kompilasi + reproducible PASS di CI; belum diuji di tablet |
 | UEFI (uefi-pipa) | BLOCKED | Build belum jalan |
 | Android boot | NOT TESTED | Tidak diubah |
 | iPadOS boot / userland / SpringBoard | BLOCKED | Kernel dan IPSW |
