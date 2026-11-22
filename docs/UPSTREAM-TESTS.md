@@ -21,3 +21,13 @@ sudah tidak ada dihapus. Tidak ada test yang diubah atau dilewati.
 (`arch/arm64/boot/src/console.c`, `arch/arm64/boot/README.md`). Itu keputusan branding upstream.
 
 CI: job `upstream-host-tests` (dengan patch, harus lulus) dan `upstream-baseline` (murni, `continue-on-error`).
+
+## `init_test` sebagai pengguna biasa (temuan CI pertama, 23 Nov 2026)
+
+Di runner GitHub (bukan root) `workbench/run.sh` gagal satu cek: `init_test.c:512`, "dark appearance: Success".
+Direproduksi di sini dengan `setpriv --reuid=65534`: 1910 cek, 1 gagal; sebagai root: 1920 cek, 0 gagal.
+Penyebab: `put_preferences` (`init/init.c`) memanggil `fchown(fd, 501, 501)`, yang hanya berhasil sebagai root (init di
+tablet berjalan sebagai root); test baris 512 tidak dijaga `as_root` seperti cek kepemilikan lainnya. Pesan "Success"
+berasal dari `errno` yang dibaca setelah `close()`. Jadi: asumsi test upstream terhadap platform, bukan integrasi pipa.
+CI menjalankan suite sebagai root, lalu menjalankan `init_test` sebagai pengguna biasa dan mewajibkan tepat kegagalan
+yang sudah diketahui ini.

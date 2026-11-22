@@ -2,7 +2,8 @@
 #  offline           scripts/build.sh: must end "OFFLINE CHECKS: PASS". It also prints "READY FOR HARDWARE BOOT", which
 #                    stays NO until the kernel, firmware, payload, boot image and root image exist (they need Apple's
 #                    IPSW and the owner's tablet, which a public CI must not have): that line is a report, not a pass.
-#  upstream-tests    the pinned HakiOS kernel's host tests with patches/upstream and pipa: must pass.
+#  upstream-tests    the pinned HakiOS kernel's host tests with patches/upstream and pipa, as root: must pass;
+#                    then init_test as an ordinary user, which must fail only in its one known place.
 #  upstream-baseline the same tests on the kernel exactly as upstream has it: must FAIL in the two known tests
 #                    (docs/UPSTREAM-TESTS.md). If upstream fixes them this job fails, saying the patch can go.
 # The hardware gate is scripts/readiness.sh; .github/workflows/readiness.yml runs it on demand and fails while NO.
@@ -57,7 +58,16 @@ jobs:
           scripts/fetch-upstream.sh
           cd "$HAKIOS_WORK/hakios-xnu-kernel"
           python3 tools/device.py add --from "$GITHUB_WORKSPACE"
-          workbench/run.sh
+          # As root, as the tablet's init runs: upstream's init_test expects fchown to mobile (501) to succeed and
+          # fails as an ordinary user (docs/UPSTREAM-TESTS.md). The non-root result is kept below, not hidden.
+          sudo -E env "PATH=$PATH" workbench/run.sh
+      - name: The same init_test as an ordinary user (upstream limitation, recorded)
+        run: |
+          cd "${{ runner.temp }}/hakios-work/hakios-xnu-kernel"
+          cc -std=c11 -Wall -Wextra -Werror -O2 -Ilib/libmini workbench/init_test.c -o /tmp/init_test
+          if /tmp/init_test > /tmp/init_test.log 2>&1; then echo "init_test passes without root now"; else
+            grep -q 'init_test.c:512' /tmp/init_test.log && grep -q '1 failed' /tmp/init_test.log
+            echo "as an ordinary user: exactly the known failure at init_test.c:512"; fi
 
   upstream-baseline:
     runs-on: ubuntu-24.04
