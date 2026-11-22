@@ -1,0 +1,3 @@
+# Unified diffs carry context lines that start with " " before the source's own tabs; git's whitespace rules do not
+# apply to that format. What the patches produce is checked instead: scripts/build.sh runs git diff --check in each patched tree.
+*.patch -whitespace

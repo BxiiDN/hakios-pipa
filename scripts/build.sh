@@ -21,7 +21,7 @@ export HAKIOS_KERNEL=$K
 step "unit tests: partition validator, boot manager env, hardware facts" python3 -m unittest discover -s "$ROOT/tests"
 step "firmware manifest verifier: self-test" python3 "$ROOT/tools/firmware_manifest.py" --self-test
 step "boot image verifier: unit tests" python3 "$ROOT/tools/verify_bootimg.py" --self-test
-step "git diff --check (committed tree and working tree)" bash -c "cd '$ROOT' && git diff --check \$(git hash-object -t tree /dev/null) HEAD && git diff --check"
+step "git diff --check (committed tree and working tree; *.patch by .gitattributes)" bash -c "cd '$ROOT' && git diff --check \$(git hash-object -t tree /dev/null) HEAD && git diff --check"
 step "pipa device tree from Linux merged" "$ROOT/tools/mkdts.sh" "$WORK/linux" "$WORK/pipa-mainline.dts"
 (cd "$K" && python3 tools/device.py remove pipa >/dev/null 2>&1 || true)
 step "pipa package brought into the kernel checkout" bash -c "cd '$K' && python3 tools/device.py add --from '$ROOT'"
@@ -55,6 +55,17 @@ fi
 # the iPadOS 17 base: UniXNU-pipa's own checks and driver host tests
 step "UniXNU base pinned, iPadOS 17.7.11 profile on xnu-10063.141.1" "$ROOT/scripts/fetch-unixnu.sh"
 step "UniXNU-pipa board check and pipa driver host tests" "$ROOT/scripts/unixnu-checks.sh"
+patched_clean() {  # what the patch series produce is whitespace-clean, new files included
+	local tree=$1 dir=$2 f
+	git -C "$tree" diff --check || return 1
+	for f in $(cat "$dir"/*.patch | grep -oE '^\+\+\+ b/[^[:space:]]+' | cut -c7- | sort -u); do
+		git -C "$tree" ls-files --error-unmatch "$f" >/dev/null 2>&1 && continue
+		! grep -nE '[[:space:]]+$' "$tree/$f" || return 1
+	done
+}
+step "git diff --check of what patches/ produce in the three patched trees" bash -c "$(declare -f patched_clean); \
+	patched_clean '$K' '$ROOT/patches/upstream' && patched_clean '$WORK/UniXNU' '$ROOT/patches/unixnu' && \
+	patched_clean '$WORK/UniXNU-pipa' '$ROOT/patches/unixnu-pipa'"
 step "storage safety of the menu UniXNU's payload builder writes for pipa" python3 "$ROOT/tools/storage_safety.py" "$WORK/UniXNU" "$WORK/UniXNU-pipa"
 step "integration tests on UniXNU's real payload builder" bash -c "cd '$ROOT/tests' && HAKIOS_WORK='$WORK' HAKIOS_REQUIRE_INTEGRATION=1 python3 -m unittest -q test_payload_integration test_unixnu_image"
 if command -v c++ >/dev/null; then
