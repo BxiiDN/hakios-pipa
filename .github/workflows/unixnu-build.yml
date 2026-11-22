@@ -74,7 +74,7 @@ jobs:
         run: scripts/fetch-unixnu.sh
       - name: Diagnostic patches (diagnostic variant only)
         if: matrix.variant == 'diagnostic'
-        run: for p in patches/diagnostic/*.patch; do git -C "$HAKIOS_WORK/UniXNU-pipa" apply "$p" && echo "applied $p"; done
+        run: for p in "$PWD"/patches/diagnostic/*.patch; do git -C "$HAKIOS_WORK/UniXNU-pipa" apply "$p" && echo "applied $p"; done
       - name: Defconfig, fetch, status
         working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
         env:
@@ -89,6 +89,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./unixnu build kernel
+      - name: The end of each build log (failure only)
+        if: failure()
+        run: |
+          for f in "$HAKIOS_WORK"/UniXNU/out/*/*/*/logs/*.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$(basename "$f") (last 120 lines)"; tail -n 120 "$f"; echo "::endgroup::"
+          done
       - name: Manifest of what was built
         if: always()
         run: |
@@ -148,6 +155,13 @@ jobs:
         env:
           UNIXNU_UEFI: ${{ env.HAKIOS_WORK }}/uefi-pipa
         run: ./unixnu build firmware --uefi ../uefi-pipa
+      - name: The end of each build log (failure only)
+        if: failure()
+        run: |
+          for f in "$HAKIOS_WORK"/UniXNU/out/*/*/*/logs/*.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$(basename "$f") (last 120 lines)"; tail -n 120 "$f"; echo "::endgroup::"
+          done
       - name: Manifest of what was built
         if: always()
         run: |
