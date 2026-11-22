@@ -1,0 +1,189 @@
+# The iPadOS 17 build of pipa on GitHub's runners: the XNU 10063 kernel (with its prelink), the UniXNU EFI package
+# and the uefi-pipa firmware, from the commits UPSTREAM pins, with hakios-pipa's patches applied.
+#
+# The macOS jobs follow UniXNU's own .github/workflows/macos.yml (macos-26, Xcode's iphoneos SDK): the path UniXNU
+# builds with itself. The Linux job builds UniXNU's Linux toolchain (scripts/linux/setup-toolchain.py) and caches it,
+# for the WSL2 route.
+#
+# Nothing derived from Apple software or vendor firmware is uploaded: no kernel, kernelcache, IPSW member, firmware
+# volume or image. Only text logs, and a manifest of SHA-256 digests and sizes of what was built. A step that fails
+# fails its job; nothing is skipped into a pass.
+name: unixnu-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [pipa-bringup]
+    paths:
+      - UPSTREAM
+      - patches/unixnu/**
+      - patches/unixnu-pipa/**
+      - scripts/fetch-unixnu.sh
+      - scripts/lib.sh
+      - tools/build_manifest.py
+      - .github/workflows/unixnu-build.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unixnu-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  macos-kernel:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      HAKIOS_WORK: ${{ github.workspace }}/../work
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Host tools
+        run: |
+          brew install bash coreutils llvm lld mtools dtc
+          command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
+      - name: Toolchain report
+        run: |
+          sw_vers; uname -m; xcodebuild -version; xcrun --sdk iphoneos --show-sdk-version
+          clang --version | head -1; "$(brew --prefix llvm)/bin/clang" --version | head -1; python3 --version
+      - name: Pinned UniXNU, UniXNU-pipa and hakios-pipa patches
+        env:
+          SKIP_UEFI_PIPA: '1'
+        run: scripts/fetch-unixnu.sh
+      - name: Defconfig, fetch, status
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
+          ./unixnu fetch
+          ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
+      - name: Build kernel (XNU 10063.141.1, archives, prelink against the 21H461 kernelcache)
+        id: kernel
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./unixnu build kernel
+      - name: Manifest of what was built
+        if: always()
+        run: |
+          python3 tools/build_manifest.py "$HAKIOS_WORK/UniXNU" --status "$RUNNER_TEMP/status.json" \
+            --out "$RUNNER_TEMP/public/kernel-manifest.json" --logs "$RUNNER_TEMP/public/logs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel-logs-and-manifest
+          path: ${{ runner.temp }}/public/
+          retention-days: 14
+      - name: Remove proprietary inputs
+        if: always()
+        run: rm -rf "$HAKIOS_WORK/UniXNU/out/ipsw" "$HAKIOS_WORK"/UniXNU/out/*/kernel "$HAKIOS_WORK/UniXNU/out/feeds"
+
+  macos-firmware:
+    runs-on: macos-26
+    timeout-minutes: 240
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      HAKIOS_WORK: ${{ github.workspace }}/../work
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Host tools
+        run: |
+          brew install bash coreutils llvm lld mtools dtc nasm mono
+          "$(brew --prefix llvm)/bin/clang" --version | head -1; nasm -v; mono --version | head -1
+      - name: Pinned UniXNU, UniXNU-pipa, uefi-pipa and hakios-pipa patches
+        run: scripts/fetch-unixnu.sh
+      - name: Mu-Silicium Python requirements
+        run: python3 -m pip install -r "$HAKIOS_WORK/uefi-pipa/pip-requirements.txt"
+      - name: Defconfig and fetch
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
+          ./unixnu fetch
+          ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
+      - name: Build the UniXNU EFI package
+        id: package
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        run: ./unixnu build package
+      - name: Build uefi-pipa (Mu-Silicium pipaPkg with UniXNU and DarwinBoot)
+        id: firmware
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        env:
+          UNIXNU_UEFI: ${{ env.HAKIOS_WORK }}/uefi-pipa
+        run: ./unixnu build firmware --uefi ../uefi-pipa
+      - name: Manifest of what was built
+        if: always()
+        run: |
+          python3 tools/build_manifest.py "$HAKIOS_WORK/UniXNU" --uefi "$HAKIOS_WORK/uefi-pipa" --status "$RUNNER_TEMP/status.json" \
+            --out "$RUNNER_TEMP/public/firmware-manifest.json" --logs "$RUNNER_TEMP/public/logs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: firmware-logs-and-manifest
+          path: ${{ runner.temp }}/public/
+          retention-days: 14
+
+  linux-toolchain:
+    # UniXNU's Linux toolchain for the WSL2 route: patched clang, cctools-port ld64, mig, iig, lzfse. Hours the first
+    # time; the result is cached by the digest of setup-toolchain.py, which pins every source it builds.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      HAKIOS_WORK: ${{ github.workspace }}/../work
+      UNIXNU_TOOLCHAIN: /opt/unixnu-linux
+    steps:
+      - uses: actions/checkout@v5
+      - name: Pinned UniXNU
+        env:
+          SKIP_UEFI_PIPA: '1'
+        run: scripts/fetch-unixnu.sh
+      - name: Cache key
+        id: key
+        run: echo "key=unixnu-linux-$(sha256sum "$HAKIOS_WORK/UniXNU/scripts/linux/setup-toolchain.py" | cut -c1-16)-$(sha256sum "$HAKIOS_WORK"/UniXNU/scripts/linux/*.patch 2>/dev/null | sha256sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: /opt/unixnu-linux
+          key: ${{ steps.key.outputs.key }}
+      - name: Host packages (setup-toolchain.py --print-packages)
+        run: |
+          sudo apt-get update
+          sudo bash -c "$(python3 "$HAKIOS_WORK/UniXNU/scripts/linux/setup-toolchain.py" --print-packages | grep -v '^apt-get update')"
+      - name: Build the toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/public"
+          sudo -E TMPDIR="$RUNNER_TEMP" python3 "$HAKIOS_WORK/UniXNU/scripts/linux/setup-toolchain.py" --package-manager none \
+            -j "$(nproc)" /opt/unixnu-linux 2>&1 | tee "$RUNNER_TEMP/public/setup-toolchain.log"
+      - name: Check the toolchain
+        run: |
+          mkdir -p "$RUNNER_TEMP/public"
+          sudo python3 "$HAKIOS_WORK/UniXNU/scripts/linux/setup-toolchain.py" --check /opt/unixnu-linux 2>&1 | tee "$RUNNER_TEMP/public/toolchain-check.log"
+          { /opt/unixnu-linux/llvm/bin/clang --version | head -1
+            for f in llvm/bin/clang CommandLineTools/usr/bin/ld CommandLineTools/usr/libexec/migcom XcodeDefault.xctoolchain/usr/bin/iig bin/lzfse; do
+              [ -e "/opt/unixnu-linux/$f" ] && echo "$(sha256sum "/opt/unixnu-linux/$f" | cut -c1-64) $f" || echo "MISSING $f"
+            done; } | tee "$RUNNER_TEMP/public/toolchain-versions.txt"
+          ! grep -q '^MISSING' "$RUNNER_TEMP/public/toolchain-versions.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-toolchain-logs
+          path: ${{ runner.temp }}/public/
+          retention-days: 14

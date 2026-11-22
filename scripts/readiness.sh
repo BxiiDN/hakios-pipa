@@ -19,7 +19,14 @@ have "payload volume (payload.img)" "$(first payload.img)"
 [ -n "$img" ] || img=$(first boot.img)
 have "boot image" "$img"
 have "iPadOS root image for the ipados partition" "$(first 'userdata-root*.img')"
-if [ $missing = 0 ]; then "$ROOT/scripts/preflight.sh" --image "$img" "${pre[@]}" || missing=$((missing + 1))
+if [ $missing = 0 ]; then
+	# the image must be made of these very pieces, and they must be the ones this build recorded
+	manifest=$ROOT/logs/readiness-manifest.json
+	python3 "$ROOT/tools/build_manifest.py" "$WORK/UniXNU" --uefi "$WORK/uefi-pipa" --out "$manifest" >/dev/null
+	python3 "$ROOT/tools/image_consistency.py" --image "$img" --kernel "$(first kernel.macho)" --payload "$(first payload.img)" \
+		--firmware "$({ find "$WORK/uefi-pipa" -path '*pipa*' -name 'SILICIUM_UEFI.fd' -type f 2>/dev/null || true; } | sort | tail -1)" \
+		--manifest "$manifest" || missing=$((missing + 1))
+	"$ROOT/scripts/preflight.sh" --image "$img" "${pre[@]}" || missing=$((missing + 1))
 else say "hardware preflight not run: artefacts are missing"; fi
 [ $missing = 0 ] && { say "READY FOR HARDWARE BOOT: YES"; exit 0; }
 say "READY FOR HARDWARE BOOT: NO ($missing requirement(s) not met)"; exit 1

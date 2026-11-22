@@ -12,9 +12,11 @@ install=0; mu=0; uxt=0; report=0
 for a in "$@"; do case $a in --install) install=1;; --mu-silicium) mu=1;; --unixnu-toolchain) uxt=1;; --report) report=1;;
 	*) die "unknown $a";; esac; done
 
-PKGS=(git make cmake ninja-build python3 python3-venv python3-pip clang lld llvm gcc g++ gcc-aarch64-linux-gnu
-      binutils-aarch64-linux-gnu flex bison bc libssl-dev zlib1g-dev uuid-dev libbsd-dev device-tree-compiler mtools
-      unifdef nasm cpio xz-utils lzma-dev qemu-system-arm qemu-efi-aarch64 qemu-user shellcheck android-sdk-platform-tools)
+PKGS=(git gh make cmake ninja-build python3 python3-venv python3-pip python3-dev clang lld llvm llvm-dev libclang-dev
+      gcc g++ build-essential pkg-config gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu flex bison bc patch rsync
+      curl wget bzip2 cpio xz-utils liblzma-dev tcsh unifdef libssl-dev zlib1g-dev uuid-dev libbsd-dev libgnutls28-dev
+      device-tree-compiler mtools nasm mono-devel gettext locales swig python3-pyelftools
+      qemu-system-arm qemu-efi-aarch64 qemu-user shellcheck android-sdk-platform-tools)
 if grep -qi microsoft /proc/version 2>/dev/null; then say "WSL: $(uname -r)"; else say "not WSL (fine on Ubuntu too)"; fi
 [ -r /etc/os-release ] && say "$(. /etc/os-release; echo "$PRETTY_NAME")"
 command -v dpkg >/dev/null || die "this script is for apt-based systems; UniXNU's setup-toolchain.py covers dnf/pacman/zypper"

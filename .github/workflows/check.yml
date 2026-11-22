@@ -28,6 +28,11 @@ jobs:
       - uses: actions/checkout@v5
       - name: Host packages
         run: sudo apt-get update && sudo apt-get install -y $HOST_PACKAGES
+      - name: Every package scripts/wsl-setup.sh installs exists on Ubuntu 24.04 (the WSL2 image)
+        run: |
+          pkgs=$(sed -n '/^PKGS=(/,/)$/p' scripts/wsl-setup.sh | tr -d '()' | sed 's/PKGS=//' | tr -s ' \n' ' ')
+          sudo apt-get install --dry-run -y $pkgs > /dev/null
+          echo "all $(echo $pkgs | wc -w) package names resolve"
       - name: Tool versions
         run: scripts/wsl-setup.sh --report
       - name: Offline build and checks (scripts/build.sh)
