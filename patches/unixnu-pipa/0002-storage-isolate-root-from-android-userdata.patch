@@ -1,0 +1,124 @@
+diff --git a/board.toml b/board.toml
+index 203c7de..33ea57d 100644
+--- a/board.toml
++++ b/board.toml
+@@ -221,8 +221,8 @@ kernel_args = [
+   "-no_slto_panic",
+   "ml-timeout-lock-panic-scale=40",
+   "native-ufs-root=1",
++  "native-ufs-root-part=ipados",
+   "native-ufs-diagnostics=1",
+-  "sheng-data-persist=2",
+   "sheng-disable-watchdogd=1",
+   "-no_corpses",
+   "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+@@ -267,11 +267,8 @@ text_fixups = [
+   "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
+   "dyld_shared_cache_arm64.11,34f3b84,979701944914d794,e0031faa1f2003d5",
+ ]
+-[payload.install]
+-title = "Install and boot"
+-confirm = "ERASE all iPadOS user data and install again?"
+-confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+-confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
++# hakios-pipa 0002: no [payload.install]. Its entry erased the iPadOS Data store (sheng-data-reset=1/2) inside
++# Android's userdata. A reset entry returns only with a root partition of iPadOS's own (docs/DUAL-BOOT.md).
+
+
+ # Dual boot with Android (hakios-pipa patches/unixnu/0001): Android first and default, so the 10 s countdown ends in
+diff --git a/drivers/ShengUfs/NativeUfs.cpp b/drivers/ShengUfs/NativeUfs.cpp
+index 56c0b6f..b36806e 100644
+--- a/drivers/ShengUfs/NativeUfs.cpp
++++ b/drivers/ShengUfs/NativeUfs.cpp
+@@ -1210,6 +1210,7 @@ extern "C" int native_ufs_store_open (uint64_t blocks, uint64_t *firstLba, const
+   const char *reason = "";
+   int ok = 0;
+   if (!storeMode ()) reason = "off";
++  else if (rootPartitionIsAndroidUserdata ()) reason = "refused: the root partition is Android's userdata";
+   else if (!gStoreGeometry.valid || !gHost.ready) reason = "no root layout";
+   else if (gStoreRegionBlocks) reason = "already open";
+   else {
+@@ -1434,6 +1435,7 @@ extern "C" int native_ufs_log_open (uint64_t *firstLba, uint64_t *blocks, const
+   const char *reason = "";
+   int ok = 0;
+   if (!logMode ()) reason = "off";
++  else if (rootPartitionIsAndroidUserdata ()) reason = "refused: the root partition is Android's userdata";
+   else if (!gStoreGeometry.valid || !gHost.ready) reason = "no root layout";
+   else if (gLogRegionBlocks) reason = "already open";
+   else {
+@@ -2172,6 +2174,15 @@ bool NativeUfs::start (IOService *provider)
+   unsigned probe = 0, rootMode = 0;
+   PE_parse_boot_argn ("native-ufs-probe", &probe, sizeof (probe));
+   PE_parse_boot_argn ("native-ufs-root", &rootMode, sizeof (rootMode));
++  // hakios-pipa: native-ufs-root-part=<GPT name> moves the root off Android's userdata (RootLayout.h gRootPartitionName).
++  {
++    char part[36] = {};
++    if (PE_parse_boot_arg_str ("native-ufs-root-part", part, sizeof (part)) && part[0]) {
++      strlcpy (gRootPartitionName, part, sizeof (gRootPartitionName));
++    }
++    IOLog ("NativeUfs: root partition \"%s\"%s\n", gRootPartitionName,
++           rootPartitionIsAndroidUserdata () ? " (Android's userdata: no write window will open)" : "");
++  }
+   native_ufs_probe_requested = probe != 0;
+   // Default: match for observability only, never touch the controller. Hardware work runs once,
+   // from the root-device personality; the ufshc nub match stays observation-only.
+diff --git a/drivers/ShengUfs/RootLayout.h b/drivers/ShengUfs/RootLayout.h
+index 82851d6..9bfe152 100644
+--- a/drivers/ShengUfs/RootLayout.h
++++ b/drivers/ShengUfs/RootLayout.h
+@@ -56,7 +56,17 @@ static bool rootEntryUsed (const uint8_t *entry)
+   return used != 0;
+ }
+
+-// Find the partition named "userdata" in LUN 0's primary GPT (4096-byte sectors), then read the
++// The partition the root image lives in. "userdata" unless the boot argument native-ufs-root-part names another one
++// (NativeUfs::start, before the first findRootLayout). hakios-pipa: Android keeps userdata; iPadOS gets its own partition.
++static char gRootPartitionName[36] = "userdata";
++
++// True when the root partition is Android's userdata: the persistent store and the log never open a write window then.
++static bool rootPartitionIsAndroidUserdata (void)
++{
++  return strcmp (gRootPartitionName, "userdata") == 0;
++}
++
++// Find the partition named gRootPartitionName in LUN 0's primary GPT (4096-byte sectors), then read the
+ // manifest at its first block. Read-only. Returns false only if the GPT itself is unusable.
+ static bool findRootLayout (RootLayout *layout, const char **why)
+ {
+@@ -105,7 +115,8 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+     *why = "GPT entries CRC";
+     return false;
+   }
+-  static const char wanted[] = "userdata";
++  const char *wanted = gRootPartitionName;
++  const size_t wantedBytes = strlen (gRootPartitionName) + 1;   // the GPT name's terminating UTF-16 NUL is compared too
+   bool found = false;
+   for (uint32_t index = 0; index < count; index++) {
+     const uint8_t *entry = gScratch + index * 128;
+@@ -123,7 +134,7 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+       }
+     }
+     bool match = true;
+-    for (unsigned c = 0; c < sizeof (wanted); c++) {
++    for (unsigned c = 0; c < wantedBytes && c < 36; c++) {
+       if (entry[56 + 2 * c] != static_cast<uint8_t> (wanted[c]) || entry[57 + 2 * c] != 0) {
+         match = false;
+         break;
+@@ -131,7 +142,7 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+     }
+     if (match) {
+       if (found) {
+-        *why = "duplicate userdata partition";
++        *why = "duplicate root partition";
+         return false;
+       }
+       layout->userdataFirst = le64 (entry + 32);
+@@ -140,7 +151,7 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+     }
+   }
+   if (!found || layout->userdataLast < layout->userdataFirst) {
+-    *why = "no userdata partition";
++    *why = "no root partition";
+     return false;
+   }
+   gRootDiagnostic.first = layout->userdataFirst;

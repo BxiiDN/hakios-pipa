@@ -1,0 +1,14 @@
+# On demand: is there an image that may be started on the tablet? Fails while the answer is NO -- by design.
+name: readiness
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  readiness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: READY FOR HARDWARE BOOT
+        env:
+          HAKIOS_WORK: ${{ runner.temp }}/hakios-work
+        run: scripts/readiness.sh

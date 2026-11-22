@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Everything that can be built and checked without the tablet, with a PASS / FAIL / BLOCKED line for each.
-# Writes logs/build-summary.txt. Exit 1 if anything that should pass failed; BLOCKED is not a failure.
+# Writes logs/build-summary.txt and ends with two separate verdicts:
+#   OFFLINE CHECKS: PASS|FAIL        what this script could run passed (its exit code: 0 / 1)
+#   READY FOR HARDWARE BOOT: YES|NO  scripts/readiness.sh: every artefact built and the hardware preflight passed
+# BLOCKED lines are neither: a build that is BLOCKED makes READY FOR HARDWARE BOOT "NO", never "YES".
 source "$(dirname "$0")/lib.sh"
 need python3; need git
 K=$WORK/hakios-xnu-kernel
@@ -18,6 +21,7 @@ export HAKIOS_KERNEL=$K
 step "unit tests: partition validator, boot manager env, hardware facts" python3 -m unittest discover -s "$ROOT/tests"
 step "firmware manifest verifier: self-test" python3 "$ROOT/tools/firmware_manifest.py" --self-test
 step "boot image verifier: unit tests" python3 "$ROOT/tools/verify_bootimg.py" --self-test
+step "git diff --check (committed tree and working tree)" bash -c "cd '$ROOT' && git diff --check \$(git hash-object -t tree /dev/null) HEAD && git diff --check"
 step "pipa device tree from Linux merged" "$ROOT/tools/mkdts.sh" "$WORK/linux" "$WORK/pipa-mainline.dts"
 (cd "$K" && python3 tools/device.py remove pipa >/dev/null 2>&1 || true)
 step "pipa package brought into the kernel checkout" bash -c "cd '$K' && python3 tools/device.py add --from '$ROOT'"
@@ -51,6 +55,13 @@ fi
 # the iPadOS 17 base: UniXNU-pipa's own checks and driver host tests
 step "UniXNU base pinned, iPadOS 17.7.11 profile on xnu-10063.141.1" "$ROOT/scripts/fetch-unixnu.sh"
 step "UniXNU-pipa board check and pipa driver host tests" "$ROOT/scripts/unixnu-checks.sh"
+step "storage safety of the menu UniXNU's payload builder writes for pipa" python3 "$ROOT/tools/storage_safety.py" "$WORK/UniXNU" "$WORK/UniXNU-pipa"
+step "integration tests on UniXNU's real payload builder" bash -c "cd '$ROOT/tests' && HAKIOS_WORK='$WORK' HAKIOS_REQUIRE_INTEGRATION=1 python3 -m unittest -q test_payload_integration test_unixnu_image"
+if command -v c++ >/dev/null; then
+	rlt=$(mktemp)
+	step "UFS root parser host test (RootLayout.h, patched)" bash -c "c++ -std=c++17 -Wall -Wno-unused-function -Wno-deprecated-declarations \
+		-I '$WORK/UniXNU-pipa/drivers/ShengUfs' '$ROOT/tests/c/root_layout_test.cpp' -lcrypto -lz -o '$rlt' && '$rlt'"
+fi
 if [ -f "$WORK/uefi-pipa/Resources/DTBs/pipa.dts" ]; then
 	step "hardware facts of the published pipa tree (uefi-pipa) hold" python3 "$ROOT/tools/pipa_hw_facts.py" "$WORK/uefi-pipa/Resources/DTBs/pipa.dts" --check
 fi
@@ -63,6 +74,8 @@ if [ -f "$WORK/linux/drivers/gpu/drm/msm/adreno/a6xx_catalog.c" ]; then
 fi
 if command -v aarch64-linux-gnu-gcc >/dev/null && command -v flex >/dev/null; then
 	step "U-Boot boot manager (scripts/build-uboot.sh)" "$ROOT/scripts/build-uboot.sh"
+elif [ "${HAKIOS_REQUIRE_UBOOT:-0}" = 1 ]; then
+	echo "FAIL     U-Boot boot manager: aarch64-linux-gnu-gcc and flex are required here (HAKIOS_REQUIRE_UBOOT=1)" | tee -a "$SUMMARY"; failed=1
 else
 	blocked "U-Boot boot manager" "aarch64-linux-gnu-gcc and flex needed (scripts/wsl-setup.sh --install)"
 fi
@@ -79,6 +92,9 @@ fi
 blocked "iPadOS 17 user space / payload" "needs the iPad7,1 17.7.11 IPSW members (./unixnu ipsw fetch) on your machine"
 blocked "QEMU boot" "needs a kernel; no qemu-system-aarch64 here"
 blocked "anything on the tablet" "this script never connects to it (docs/DUAL-BOOT.md)"
+if "$ROOT/scripts/readiness.sh" >> "$LOG" 2>&1; then ready=YES; else ready=NO; fi
+echo "OFFLINE CHECKS: $([ $failed = 0 ] && echo PASS || echo FAIL)" | tee -a "$SUMMARY"
+echo "READY FOR HARDWARE BOOT: $ready (scripts/readiness.sh)" | tee -a "$SUMMARY"
 say "summary: $SUMMARY"
 cat "$SUMMARY"
 exit $failed

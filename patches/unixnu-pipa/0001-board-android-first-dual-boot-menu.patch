@@ -14,7 +14,7 @@ index cfb78d2..203c7de 100644
 @@ -273,6 +273,13 @@ confirm = "ERASE all iPadOS user data and install again?"
  confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
  confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
- 
+
 +
 +# Dual boot with Android (hakios-pipa patches/unixnu/0001): Android first and default, so the 10 s countdown ends in
 +# Android; iPadOS is chosen with the volume keys and Power. Every entry other than iPadOS is a reset: this image is

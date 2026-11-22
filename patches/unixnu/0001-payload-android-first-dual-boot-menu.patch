@@ -39,11 +39,11 @@ index 63c8769..9fab248 100644
 +++ b/scripts/unixnu/payload.py
 @@ -17,6 +17,7 @@ import tempfile
  from pathlib import Path
- 
+
  from . import kernel as kernel_step
 +from .dualboot import apply_dual_boot
  from .util import Error, expand, log, run, sha256_file, tool
- 
+
  EPOCH = 315532800   # 1980-01-01, the first FAT timestamp; keeps the volume reproducible
 @@ -268,6 +269,8 @@ def build(ctx, kernel=None):
                 '[[entry]]\nid = "shutdown"\ntitle = "Power off"\ntype = "action"\naction = "shutdown"\n')

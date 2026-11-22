@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-# Read-only copy of each UFS LUN's primary GPT (the first 6 sectors of 4096 bytes) from a rooted Android, for
-# tools/pipa_gpt.py. It reads /dev/block/sd[a-h] with dd if=... and writes only to /sdcard and to this PC.
+# Read-only copy of each UFS LUN's primary GPT (the first 6 sectors of 4096 bytes), streamed to this PC (root).
 #   dump-gpt.sh OUTDIR
-source "$(dirname "$0")/lib.sh"
-need adb
+source "$(dirname "$0")/adb-lib.sh"
+need_android; need_root
 OUT=${1:?usage: dump-gpt.sh OUTDIR}; mkdir -p "$OUT"
-[ "$(adb get-state 2>/dev/null)" = device ] || die "no Android device on adb"
-[ "$(adb shell getprop ro.product.device | tr -d '\r')" = pipa ] || die "the connected device is not pipa"
 for lun in a b c d e f g h; do
-	adb shell "su -c 'test -b /dev/block/sd$lun'" 2>/dev/null || continue
-	adb shell "su -c 'dd if=/dev/block/sd$lun of=/sdcard/gpt-sd$lun.bin bs=4096 count=6'" >/dev/null
-	adb pull -q "/sdcard/gpt-sd$lun.bin" "$OUT/sd$lun.bin"
-	adb shell "rm /sdcard/gpt-sd$lun.bin"
+	su_cmd "test -b /dev/block/sd$lun && echo y" | grep -q y || continue
+	adb exec-out "su -c 'dd if=/dev/block/sd$lun bs=4096 count=6 2>/dev/null'" > "$OUT/sd$lun.bin"
+	[ "$(stat -c %s "$OUT/sd$lun.bin")" = 24576 ] || die "sd$lun: short read"
 	say "sd$lun: $(python3 "$ROOT/tools/pipa_gpt.py" read "$OUT/sd$lun.bin" | grep -c '"name"') partitions"
 done
 python3 "$ROOT/tools/pipa_gpt.py" read "$OUT"/*.bin > "$OUT/layout.json"
+(cd "$OUT" && sha256sum sd?.bin > SHA256SUMS)
 say "layout: $OUT/layout.json; keep these files private (they identify the tablet)"

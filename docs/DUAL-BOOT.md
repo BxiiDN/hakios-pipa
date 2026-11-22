@@ -18,10 +18,10 @@ dan iPadOS dilihat berjalan bergantian di Pad 6.** Sesi ini tidak mem-flash dan 
 | Image | uefi-pipa + payload UniXNU (`./unixnu bootimg`) | U-Boot hakios-uefi + `loader.efi` (`scripts/build-uboot.sh`) |
 | Menu | menu UniXNU (`\EFI\UniXNU\unixnu.toml`), dibuat `scripts/unixnu/payload.py` | `bootmenu` U-Boot (`board/xiaomi/pipa.env`) |
 | Android-first | `patches/unixnu/0001` + `patches/unixnu-pipa/0001` (`[payload.dualboot]`, `timeout = 10`) | `bootmenu_default=0`, `bootmenu_delay=10` |
-| Entri | 1 Android (reset) · 2 iPadOS 17.7.11 (`xnu`) · [Install and boot, dengan konfirmasi] · 3 Recovery/Fastboot (reset) · Restart · Power off | 1 Android (reset) · 2 HakiOS · 3 Recovery/Fastboot · shell · info |
+| Entri (dari builder UniXNU yang sebenarnya, `tools/unixnu_payload_menu.py`) | 1 Android (reset) · 2 iPadOS 17.7.11 (`xnu`) · 3 Recovery/Fastboot (reset) · Restart · Power off · Tools. **Tidak ada** "Install and boot" (dihapus oleh `patches/unixnu-pipa/0002`) | 1 Android (reset) · 2 HakiOS · 3 Recovery/Fastboot · shell · info |
 | Tombol | Vol+/Vol- = atas/bawah, Power = Enter (sesuai keymap firmware; belum dilihat) | `BUTTON_REMAP_PHONE_KEYS`: VOLUMEUP→UP, VOLUMEDOWN→DOWN, POWER→ENTER (dicek di source U-Boot) |
 | Timeout/default | `[boot] timeout`/`default`; entri dengan `confirm` tidak pernah dipilih oleh countdown | `bootmenu_delay`, `bootmenu_default` (dicek di `cmd/bootmenu.c`, `common/menu.c`) |
-| Uji offline | `tests/test_unixnu_menu.py` (5) | `tests/test_bootmgr_env.py` (10), `tools/check_uboot_config.py` (Kconfig U-Boot) |
+| Uji offline | `tests/test_unixnu_menu.py` (5), `tests/test_payload_integration.py` (6, builder asli), `tests/test_unixnu_image.py` (5, image + volume FAT) | `tests/test_bootmgr_env.py` (10), `tools/check_uboot_config.py` (Kconfig U-Boot) |
 
 ## Handoff dan kegagalan
 
@@ -34,26 +34,28 @@ dan iPadOS dilihat berjalan bergantian di Pad 6.** Sesi ini tidak mem-flash dan 
 | Recovery / Fastboot | entri reset sambil menahan Vol+ (recovery) / Vol- (fastboot); ABL membaca tombol saat reset — **belum diuji**. Cara pasti tetap: matikan, Vol- + Power |
 | Image tidak diterima ABL | tablet tetap di fastboot; `fastboot reboot` |
 
-## Penyimpanan iPadOS permanen
+## Keselamatan data Android (sesi 3)
 
-UniXNU-pipa meletakkan root iPadOS (volume OS + SystemOS) di **jendela `userdata` Android**
-(`board.toml [userdata] first_lba 0x293000 … last_lba 0x3b037fa`, `native-ufs-root=1`), dan menulisnya dengan
-`fastboot flash userdata` — itu **menghapus data Android**. Tidak dipakai.
+`fastboot boot` tidak menjamin apa pun: image di RAM tetap bisa mengakses UFS. Hasil audit driver UFS UniXNU-pipa
+(`drivers/ShengUfs`): satu-satunya perintah tulis adalah `hostWrite4k` (WRITE(10)), dan hanya di dalam dua jendela —
+store Data (`sheng-data-persist=2`) dan log/export (`sheng-log=1`, juga `log=1`) — yang keduanya terletak **di dalam
+partisi root**, yang di port asli adalah `userdata` Android. Volume root sendiri read-only
+(`doFormatMedia` → `kIOReturnNotWritable`). `sheng-data-reset=1/2` mengosongkan store Data.
 
-Desain yang menjaga Android (belum dijalankan; butuh persetujuan dan backup):
+Perbaikan (`patches/unixnu-pipa/0002`, sumber dan board):
 
-1. Backup penuh (`scripts/backup-readiness.sh` + backup data milik pemilik, dipulihkan sekali sebagai uji).
-2. Ukuran `userdata` baru dan partisi `ipados` di akhir LUN 0 (sda), 1 MiB-aligned, dicek dulu:
-   `pipa_gpt.py check plans/<rencana>.json private/gpt/*.bin` → harus PASS dengan `userdata_erase_confirmed` dan
-   `backup_verified`. Mengecilkan `userdata` = format ulang `userdata` (FBE): **semua data Android hilang sekali**,
-   lalu dipulihkan dari backup.
-3. `board.toml [userdata]` UniXNU-pipa diarahkan ke LBA partisi `ipados` (bukan `userdata`), lalu image root ditulis
-   ke `ipados` saja. Android kembali memakai `userdata` yang lebih kecil.
-4. OTA Android tidak menyentuh partisi baru, tapi tool flash Xiaomi (`flash_all`) bisa menulis ulang GPT dan
-   menghapusnya: dokumentasikan sebelum update besar.
+| Sebelum | Sesudah |
+| --- | --- |
+| `[payload.install]` "ERASE all iPadOS user data…" dengan `sheng-data-reset=1`/`=2` | dihapus |
+| `sheng-data-persist=2` (jendela tulis di akhir `userdata`) | dihapus |
+| root dicari di partisi bernama `userdata` (konstanta di `RootLayout.h`) | nama dari `native-ufs-root-part=ipados`; default lama tetap untuk port lain |
+| — | driver **menolak** membuka jendela store/log bila partisi root bernama `userdata` |
 
-Tanpa repartisi, iPadOS hanya bisa dicoba dengan root di RAM/initrd (keterbatasan ukuran; belum dievaluasi untuk
-17.7.11) atau di unit yang Android-nya boleh dihapus.
+Bukti: `tools/storage_safety.py` (builder asli → PASS; board lama → 9 FAIL), `tests/test_payload_integration.py`,
+`tests/c/root_layout_test.cpp` (parser produksi `RootLayout.h`, 14 cek; tidak terkompilasi tanpa patch). Menurut source
+(belum dilihat di tablet): tanpa partisi `ipados`, kernel berhenti di mount root dan tidak membuka jendela tulis.
+
+Root permanen dan MODE B: [MODE-B.md](MODE-B.md).
 
 ## Recovery plan
 

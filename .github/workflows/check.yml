@@ -1,6 +1,11 @@
-# Every push: the pipa package held to the pinned HakiOS kernel's own checks, this repository's tools tested, the
-# loader built twice and compared. Nothing here talks to a tablet. The XNU kernel and Darwin are not built: they
-# need Apple's SDK and an IPSW, which a public CI must not have (docs/STATUS.md).
+# Every push. Nothing here talks to a tablet, and no step's failure is swallowed (no `|| true`, no continue-on-error).
+#  offline           scripts/build.sh: must end "OFFLINE CHECKS: PASS". It also prints "READY FOR HARDWARE BOOT", which
+#                    stays NO until the kernel, firmware, payload, boot image and root image exist (they need Apple's
+#                    IPSW and the owner's tablet, which a public CI must not have): that line is a report, not a pass.
+#  upstream-tests    the pinned HakiOS kernel's host tests with patches/upstream and pipa: must pass.
+#  upstream-baseline the same tests on the kernel exactly as upstream has it: must FAIL in the two known tests
+#                    (docs/UPSTREAM-TESTS.md). If upstream fixes them this job fails, saying the patch can go.
+# The hardware gate is scripts/readiness.sh; .github/workflows/readiness.yml runs it on demand and fails while NO.
 name: check
 
 on:
@@ -10,34 +15,42 @@ on:
 permissions:
   contents: read
 
+env:
+  HOST_PACKAGES: clang lld llvm gcc g++ gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu flex bison bc libssl-dev
+    zlib1g-dev uuid-dev libgnutls28-dev device-tree-compiler mtools python3-pyelftools swig python3-dev
+
 jobs:
-  pipa:
+  offline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: Host packages
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm gcc-aarch64-linux-gnu flex bison libssl-dev bc
+        run: sudo apt-get update && sudo apt-get install -y $HOST_PACKAGES
+      - name: Tool versions
+        run: scripts/wsl-setup.sh --report
       - name: Offline build and checks (scripts/build.sh)
         env:
           HAKIOS_WORK: ${{ runner.temp }}/hakios-work
           SKIP_UPSTREAM_TESTS: '1'
-        run: scripts/build.sh
-      - name: Preflight (no tablet)
-        run: scripts/preflight.sh || true
+          HAKIOS_REQUIRE_UBOOT: '1'
+        run: |
+          scripts/build.sh
+          grep -qx 'OFFLINE CHECKS: PASS' logs/build-summary.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: logs
-          path: logs/
+          path: |
+            logs/
+            build/
 
-  # The pinned kernel's own host tests, with pipa and patches/upstream/ applied: must pass.
-  upstream-host-tests:
+  upstream-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - name: Kernel at the pinned commit + patches/upstream, pipa brought in, its tests
+      - name: Kernel at the pin + patches/upstream, pipa brought in, its tests
         env:
           HAKIOS_WORK: ${{ runner.temp }}/hakios-work
         run: |
@@ -46,18 +59,20 @@ jobs:
           python3 tools/device.py add --from "$GITHUB_WORKSPACE"
           workbench/run.sh
 
-  # The same tests on the kernel exactly as upstream has it (no patch, no pipa): the baseline. At 62e09f8 two of
-  # them fail upstream (docs/UPSTREAM-TESTS.md); reported, not blocking.
   upstream-baseline:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
-      - name: Pristine kernel at the pinned commit
+      - name: The pristine kernel still fails exactly the two known tests
         env:
           HAKIOS_WORK: ${{ runner.temp }}/hakios-work
           HAKIOS_UPSTREAM_PATCHES: '0'
         run: |
           scripts/fetch-upstream.sh
-          cd "$HAKIOS_WORK/hakios-xnu-kernel" && workbench/run.sh
+          cd "$HAKIOS_WORK/hakios-xnu-kernel"
+          if python3 workbench/tools_test.py > tools.log 2>&1; then echo "tools_test passes upstream now: drop patches/upstream/0001"; exit 1; fi
+          if python3 workbench/maintainers_test.py > maint.log 2>&1; then echo "maintainers_test passes upstream now: drop patches/upstream/0001"; exit 1; fi
+          grep -q 'arch/arm64/boot/u-boot/README.md, which is not there' tools.log
+          grep -q 'arch/arm64/boot/uefi/ names nothing' maint.log
+          echo "baseline reproduced: the two known upstream failures, nothing else"

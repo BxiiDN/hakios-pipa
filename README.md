@@ -3,7 +3,7 @@
 Paket perangkat [HakiOS](https://github.com/oosexgang/hakios-xnu-kernel) untuk Xiaomi Pad 6, profil boot manager
 U-Boot, validator partisi/dual-boot offline, dan skrip Windows 11 + WSL2.
 
-**Status singkat (23 Nov 2026): belum pernah dijalankan di tablet.** Basis iPadOS 17: UniXNU + UniXNU-pipa
+**Status singkat (sesi 3, 23 Nov 2026): OFFLINE CHECKS PASS, READY FOR HARDWARE BOOT: NO. Belum pernah dijalankan di tablet.** Basis iPadOS 17: UniXNU + UniXNU-pipa
 (`xnu-10063.141.1`, iPadOS 17.7.11); HakiOS untuk tooling dan jalur riset kedua. Yang terverifikasi hanyalah sumber,
 konfigurasi dan build offline. Detail: [docs/STATUS.md](docs/STATUS.md).
 
@@ -17,6 +17,8 @@ Tidak ada apa pun di repository ini yang menulis ke penyimpanan tablet. Image bo
 | [docs/HARDWARE-FACTS.md](docs/HARDWARE-FACTS.md) | Panel, touch, speaker, Wi-Fi, GPU dari tree publik, dengan node asalnya |
 | [docs/ADRENO650.md](docs/ADRENO650.md) | Status dan rencana GPU |
 | [docs/UPSTREAM-TESTS.md](docs/UPSTREAM-TESTS.md) | Baseline host test HakiOS dan patch-nya |
+| [docs/MODE-B.md](docs/MODE-B.md) | Dual boot permanen (menu saat power-on): pilihan, risiko, root terpisah |
+| [docs/XNU-BUILD.md](docs/XNU-BUILD.md) | Build XNU 10063: dependency, input IPSW iPad7,1, perintah |
 | [docs/CLAUDE-CODE.md](docs/CLAUDE-CODE.md) | Urutan kerja dengan tablet untuk Claude Code |
 | [docs/AUDIT.md](docs/AUDIT.md) | Audit repository sumber: branch, commit, versi XNU, lisensi, dependensi |
 | [docs/IPADOS17.md](docs/IPADOS17.md) | Mengapa basis HakiOS saat ini tidak menjalankan iPadOS 17, dan pilihan jalurnya |
@@ -35,6 +37,8 @@ Tidak ada apa pun di repository ini yang menulis ke penyimpanan tablet. Image bo
 | `tools/check_uboot_config.py` | Defconfig U-Boot pipa diselesaikan dengan Kconfig U-Boot sendiri |
 | `tools/pipa_hw_facts.py` | Fakta hardware dari device tree live, dicek terhadap asumsi repo |
 | `tools/firmware_manifest.py`, `manifests/` | Digest firmware milik sendiri vs manifest (tanpa firmware di repo) |
+| `tools/storage_safety.py`, `tools/unixnu_payload_menu.py` | Menu dan argumen kernel dari builder UniXNU asli, ditolak bila menyentuh storage Android |
+| `tools/fat_reader.py`, `tools/image_root_check.py`, `tools/panel_firmware.py` | Isi volume payload di image; root vs GPT tablet; firmware touch per panel |
 | `tools/a650_check.py` | Konstanta Adreno 650: Linux vs UniXNU-pipa vs HakiOS |
 | `patches/upstream/` | Perbaikan untuk kernel HakiOS yang dipin |
 | `patches/unixnu/`, `patches/unixnu-pipa/` | Menu Android-first untuk payload UniXNU |

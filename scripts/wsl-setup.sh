@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Windows 11 + WSL2 Ubuntu (or Ubuntu/Debian): check (default) or install what the builds here need. Safe to run
 # again: it installs only what is missing, keeps existing configuration, and never removes anything.
-#   wsl-setup.sh [--install] [--mu-silicium] [--unixnu-toolchain]
+#   wsl-setup.sh [--install] [--mu-silicium] [--unixnu-toolchain] [--report]
+#     --report             only print and record the versions (exit 0): for CI logs; the builds fail on what they lack
 #     --install            apt packages that are missing
 #     --mu-silicium        also a Python venv in $WORK/venv-mu with uefi-pipa's pip requirements (Mu-Silicium/edk2)
 #     --unixnu-toolchain   also UniXNU's Linux XNU toolchain (patched clang, cctools-port): scripts/linux/setup-toolchain.py
 # Writes logs/toolchain.txt: each tool, its version, and whether it meets the minimum.
 source "$(dirname "$0")/lib.sh"
-install=0; mu=0; uxt=0
-for a in "$@"; do case $a in --install) install=1;; --mu-silicium) mu=1;; --unixnu-toolchain) uxt=1;; *) die "unknown $a";; esac; done
+install=0; mu=0; uxt=0; report=0
+for a in "$@"; do case $a in --install) install=1;; --mu-silicium) mu=1;; --unixnu-toolchain) uxt=1;; --report) report=1;;
+	*) die "unknown $a";; esac; done
 
 PKGS=(git make cmake ninja-build python3 python3-venv python3-pip clang lld llvm gcc g++ gcc-aarch64-linux-gnu
       binutils-aarch64-linux-gnu flex bison bc libssl-dev zlib1g-dev uuid-dev libbsd-dev device-tree-compiler mtools
@@ -67,4 +69,5 @@ if [ $uxt = 1 ]; then
 fi
 say "USB from WSL: usbipd-win on Windows (winget install usbipd; usbipd bind / attach --wsl), docs/WSL.md"
 say "summary: $T"
+[ $report = 1 ] && exit 0
 exit $low

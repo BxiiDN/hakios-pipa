@@ -12,12 +12,26 @@ die()  { printf '[%s] ERROR: %s\n' "$(date +%H:%M:%S)" "$*" >&2; printf 'log: %s
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed (scripts/wsl-setup.sh --install)"; }
 trap 'die "line $LINENO: \"$BASH_COMMAND\" failed"' ERR
 say "log: $LOG"
-apply_patches() {  # apply_patches TREE PATCHDIR: each patch applied once; a patch that neither applies nor is applied stops
-	local tree=$1 dir=$2 patch
+apply_patches() {  # apply_patches TREE PATCHDIR: the series applied in order on the pinned commit, once
+	# A stamp (.git/hakios-patches) records the series' digest. When it differs, the tracked files go back to the pin
+	# (git checkout -f), files the series adds are removed, and the whole series is applied again in order.
+	local tree=$1 dir=$2 patch stamp want
+	stamp=$(git -C "$tree" rev-parse --absolute-git-dir)/hakios-patches
+	want=$({ cat "$dir"/*.patch 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
+	if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -z "$(git -C "$tree" status --porcelain --untracked-files=no | grep -v '^ M' || true)" ]; then
+		say "patches already applied to $(basename "$tree") ($(ls "$dir"/*.patch 2>/dev/null | wc -l))"; return 0
+	fi
+	git -C "$tree" checkout -q -f HEAD
 	for patch in "$dir"/*.patch; do
 		[ -e "$patch" ] || continue
-		if git -C "$tree" apply --check "$patch" 2>/dev/null; then git -C "$tree" apply "$patch"; say "applied $(basename "$patch")"
-		elif git -C "$tree" apply --check -R "$patch" 2>/dev/null; then say "already applied: $(basename "$patch")"
-		else die "$(basename "$patch") neither applies to $tree nor is applied: the pin moved; refresh the patch"; fi
+		grep -oE '^\+\+\+ b/[^[:space:]]+' "$patch" | cut -c7- | while read -r f; do
+			git -C "$tree" ls-files --error-unmatch "$f" >/dev/null 2>&1 || rm -f "$tree/$f"
+		done
 	done
+	for patch in "$dir"/*.patch; do
+		[ -e "$patch" ] || continue
+		git -C "$tree" apply "$patch" || die "$(basename "$patch") does not apply to $tree at its pin: refresh the patch"
+		say "applied $(basename "$patch")"
+	done
+	echo "$want" > "$stamp"
 }
