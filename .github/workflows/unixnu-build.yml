@@ -18,7 +18,7 @@ on:
       - UPSTREAM
       - patches/unixnu/**
       - patches/unixnu-pipa/**
-      - patches/diagnostic/**
+      - owner/owner-public.pem
       - scripts/fetch-unixnu.sh
       - scripts/lib.sh
       - tools/build_manifest.py
@@ -41,15 +41,10 @@ defaults:
 
 jobs:
   macos-kernel:
-    # pinned: exactly the pinned port with hakios-pipa's patches -- the deliverable; it fails while the port needs
-    #         inputs that are not public (docs/XNU-BUILD.md).
-    # diagnostic: the same plus patches/diagnostic (owner-root key archive left out, ArmCpuSleep.h added) to find the
-    #         next errors. Its output is never a candidate image.
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [pinned, diagnostic]
-    name: macos-kernel (${{ matrix.variant }})
+    # The kernel the port builds, with the owner key the builder supplies (docs/OWNER-KEY.md): the public half
+    # committed as owner/owner-public.pem, or -- while there is none -- an ephemeral key made in the run. An ephemeral
+    # kernel proves compile, link and prelink only: it authorizes no root and is never a boot candidate.
+    name: macos-kernel
     runs-on: macos-26
     timeout-minutes: 360
     env:
@@ -72,9 +67,23 @@ jobs:
         env:
           SKIP_UEFI_PIPA: '1'
         run: scripts/fetch-unixnu.sh
-      - name: Diagnostic patches (diagnostic variant only)
-        if: matrix.variant == 'diagnostic'
-        run: for p in "$PWD"/patches/diagnostic/*.patch; do git -C "$HAKIOS_WORK/UniXNU-pipa" apply "$p" && echo "applied $p"; done
+      - name: Owner key (public half only)
+        run: |
+          mkdir -p "$RUNNER_TEMP/owner"
+          if [ -f owner/owner-public.pem ]; then
+            cp owner/owner-public.pem "$RUNNER_TEMP/owner/owner-public.pem"; kind=owner
+          else
+            ( umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$RUNNER_TEMP/owner/ephemeral.pem" )
+            openssl pkey -in "$RUNNER_TEMP/owner/ephemeral.pem" -pubout -out "$RUNNER_TEMP/owner/owner-public.pem"
+            rm -f "$RUNNER_TEMP/owner/ephemeral.pem"   # nothing in this job signs; the private half is not kept
+            kind=ephemeral
+          fi
+          modulus=$(openssl rsa -pubin -in "$RUNNER_TEMP/owner/owner-public.pem" -modulus -noout | cut -d= -f2)
+          # VerifiedRoot anchor (kits/VerifiedRoot/tools/manifest.py public_anchor): VROOTKEY, modulus, 65537
+          pin=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(b"VROOTKEY"+bytes.fromhex(sys.argv[1])+b"\x01\x00\x01").hexdigest())' "$modulus")
+          echo "owner key: $kind, anchor sha256 $pin"
+          { echo "UNIXNU_OWNER_PUBLIC_KEY=$RUNNER_TEMP/owner/owner-public.pem"; echo "UNIXNU_OWNER_KEY_SHA256=$pin"
+            echo "UNIXNU_OWNER_KEY_KIND=$kind"; } >> "$GITHUB_ENV"
       - name: Defconfig, fetch, status
         working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
         env:
@@ -101,10 +110,12 @@ jobs:
         run: |
           python3 tools/build_manifest.py "$HAKIOS_WORK/UniXNU" --status "$RUNNER_TEMP/status.json" \
             --out "$RUNNER_TEMP/public/kernel-manifest.json" --logs "$RUNNER_TEMP/public/logs"
+          k="$HAKIOS_WORK/UniXNU/out/pipa/ipados-17.7.11-21H461/pipa/tree/build/verified-root-key/key.json"
+          [ -f "$k" ] && cp "$k" "$RUNNER_TEMP/public/owner-key.json" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: kernel-${{ matrix.variant }}-logs-and-manifest
+          name: kernel-logs-and-manifest
           path: ${{ runner.temp }}/public/
           retention-days: 14
       - name: Remove proprietary inputs
@@ -138,12 +149,15 @@ jobs:
           ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
           ./unixnu fetch
           ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
-      - name: Mu_Basecore submodules the package build needs (package/build.sh says which)
+      - name: Submodules of every fetched EDK2/Mu feed (package and uefi-pipa builds)
+        # The package needs libfdt, mipisyst and the BaseTools brotli; pipaPkg also needs
+        # MdeModulePkg/Library/BrotliCustomDecompressLib/brotli (MdeModulePkg.dec(31), error 000E in run 45077836807).
         working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
         run: |
-          for d in out/feeds/mu_basecore-*; do
-            git -C "$d" submodule update --init --depth 1 MdePkg/Library/BaseFdtLib/libfdt MdePkg/Library/MipiSysTLib/mipisyst \
-              BaseTools/Source/C/BrotliCompress/brotli
+          for d in out/feeds/*/; do
+            [ -f "$d/.gitmodules" ] || continue
+            echo "== $d"; git -C "$d" config -f .gitmodules --get-regexp '^submodule\..*\.path$' | cut -d' ' -f2
+            git -C "$d" submodule update --init --depth 1 --jobs 4
           done
       - name: Build the UniXNU EFI package
         id: package

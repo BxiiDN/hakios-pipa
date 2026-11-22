@@ -1,0 +1,165 @@
+diff --git a/board.toml b/board.toml
+index 33ea57d..049a247 100644
+--- a/board.toml
++++ b/board.toml
+@@ -69,7 +69,9 @@ archives = [
+   # The verified variant of the read-only block transport (CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE) and the owner key it
+   # authenticates against; no virtio device exists on pipa, so the transport itself never configures.
+   "build-arm-driver.py VirtioMmioBlock --verified-root",
+-  "build-verified-root-key.py --pin 70a5ea346d2d779a7ef43eb4ed8b17f54488e160d8c2a6d6420969664e3ae798",
++  # The pin is the anchor digest of the builder's own owner key ($UNIXNU_OWNER_KEY_SHA256), not EsaiJJ's 70a5ea34...:
++  # the root policies are signed with the private half, which never leaves its owner (hakios-pipa docs/OWNER-KEY.md).
++  "build-verified-root-key.py",
+   "component:ShengUfs",
+   "component:AppleKeyStoreState",
+   "component:ShengHidInput",
+diff --git a/scripts/build-arm-driver.py b/scripts/build-arm-driver.py
+index 11df5e4..8bc7130 100644
+--- a/scripts/build-arm-driver.py
++++ b/scripts/build-arm-driver.py
+@@ -92,7 +92,7 @@ while index < len(arguments):
+     index += 1
+ command.extend(['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
+                 '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
+-                '-Wno-unnecessary-virtual-specifier', '-Wno-missing-designated-field-initializers', '-Wno-unused-but-set-variable', '-Wno-unused-but-set-global', '-I', str(ROOT / '.cache/xnu-work/osfmk')])
++                '-Wno-unnecessary-virtual-specifier', '-Wno-missing-designated-field-initializers', '-Wno-unused-but-set-variable', '-Wno-unknown-warning-option', '-Wno-unused-but-set-global', '-I', str(ROOT / '.cache/xnu-work/osfmk')])
+ if component in ('NativeVirtioBlock', 'NativeRamBlock', 'NativeUfs'):
+     command += ['-I', str(ROOT / 'build/storage-abi/include')]
+     if args.verified_root:
+diff --git a/scripts/build-boot-progress.py b/scripts/build-boot-progress.py
+index 8e8196f..85e3a4d 100644
+--- a/scripts/build-boot-progress.py
++++ b/scripts/build-boot-progress.py
+@@ -36,7 +36,7 @@ def compile_like(object_record, src, target, extra):
+         i += 1
+     subprocess.run(command + ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror',
+                               '-Wno-missing-field-initializers',
+-                              '-Wno-unused-but-set-variable', '-Wno-unused-but-set-global', *extra],
++                              '-Wno-unused-but-set-variable', '-Wno-unknown-warning-option', '-Wno-unused-but-set-global', *extra],
+                    cwd=record['directory'], check=True, timeout=90)
+ 
+ policy_obj = out / 'BootWatchdogPolicy.o'
+diff --git a/scripts/build-gop-legacy-display.py b/scripts/build-gop-legacy-display.py
+index 370dff3..8e93ab5 100644
+--- a/scripts/build-gop-legacy-display.py
++++ b/scripts/build-gop-legacy-display.py
+@@ -251,7 +251,7 @@ while i < len(args):
+     i += 1
+ 
+ cmd += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-unnecessary-virtual-specifier', '-Wno-c99-designator', '-Wno-reorder-init-list',
+-        '-Wno-deprecated-enum-enum-conversion', '-Wno-missing-designated-field-initializers', '-Wno-unused-but-set-variable', '-Wno-unused-but-set-global', '-I', str(ROOT / '.cache/xnu-work/osfmk')]
++        '-Wno-deprecated-enum-enum-conversion', '-Wno-missing-designated-field-initializers', '-Wno-unused-but-set-variable', '-Wno-unknown-warning-option', '-Wno-unused-but-set-global', '-I', str(ROOT / '.cache/xnu-work/osfmk')]
+ run(cmd, cwd=r['directory'])
+ 
+ keystore_source = next(ROOT.glob('kits/*/KeyStoreProbe.cpp'))
+diff --git a/scripts/build-platform-power.py b/scripts/build-platform-power.py
+index 25a2f79..50e903d 100644
+--- a/scripts/build-platform-power.py
++++ b/scripts/build-platform-power.py
+@@ -112,7 +112,7 @@ while i < len(arguments):
+ command += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-c99-designator',
+             '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
+             '-Wno-unnecessary-virtual-specifier', '-Wno-missing-designated-field-initializers',
+-            '-Wno-unused-but-set-variable', '-Wno-unused-but-set-global',
++            '-Wno-unused-but-set-variable', '-Wno-unknown-warning-option', '-Wno-unused-but-set-global',
+             '-I', OUT, '-I', ROOT / '.cache/xnu-work/osfmk']
+ run(command, cwd=record['directory'])
+ raw = obj.read_bytes()
+diff --git a/scripts/build-qca-bluetooth.py b/scripts/build-qca-bluetooth.py
+index 71bb128..38cc658 100644
+--- a/scripts/build-qca-bluetooth.py
++++ b/scripts/build-qca-bluetooth.py
+@@ -63,7 +63,7 @@ for src in sources:
+         '-mgeneral-regs-only',
+         '-Wall', '-Wextra', '-Werror',
+         '-Wno-unknown-warning-option', '-Wno-unused-parameter', '-Wno-sign-compare',
+-        '-Wno-unused-but-set-variable', '-Wno-unused-but-set-global',
++        '-Wno-unused-but-set-variable', '-Wno-unknown-warning-option', '-Wno-unused-but-set-global',
+         '-I' + str(module / 'include'),
+         '-I' + str(module / 'src'),
+         '-I' + str(module / 'shim'),
+diff --git a/scripts/build-verified-root-key.py b/scripts/build-verified-root-key.py
+new file mode 100755
+index 0000000..678051d
+--- /dev/null
++++ b/scripts/build-verified-root-key.py
+@@ -0,0 +1,79 @@
++#!/usr/bin/env python3
++"""Link the owner's VerifiedRoot trust anchor into libVerifiedRootKey.a (CONFIG_XNU_VERIFIED_ROOT_ARCHIVE).
++
++The pipa port's board.toml calls this builder, but no public repository has it (hakios-pipa docs/XNU-BUILD.md). This
++one follows the contract the rest of the tree reads: VerifiedRoot's anchor is b'VROOTKEY' + the 384-byte modulus +
++the exponent 65537 (kits/VerifiedRoot/tools/manifest.py public_anchor, VR_KEY_BYTES 395), and the kernel links it as
++the constant _verified_root_key (scripts/check-verified-block-checkpoints.py, check-owner-root-checkpoints.py).
++
++Inputs, never from the repository:
++  UNIXNU_OWNER_PUBLIC_KEY  PEM public half of the owner's RSA-3072 key (the private half stays with the owner and
++                           signs the root policies; this builder never reads it)
++  UNIXNU_OWNER_KEY_SHA256  sha256 of the 395-byte anchor the build must carry (or --pin); a mismatch stops the build
++  UNIXNU_OWNER_KEY_KIND    "owner" (default) or "ephemeral": a CI key made for one run, so the kernel can be
++                           compiled, linked and prelinked; it authorizes no root and the result is never a boot image
++"""
++import argparse
++import hashlib
++import importlib.util
++import json
++import os
++from pathlib import Path
++import shutil
++import struct
++import subprocess
++
++ROOT = Path(__file__).resolve().parents[1]
++parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++parser.add_argument('--pin', help='sha256 of the anchor (default: $UNIXNU_OWNER_KEY_SHA256)')
++args = parser.parse_args()
++
++public = os.environ.get('UNIXNU_OWNER_PUBLIC_KEY')
++if not public or not Path(public).is_file():
++    raise SystemExit('UNIXNU_OWNER_PUBLIC_KEY must name the owner public key (PEM, RSA-3072); see hakios-pipa '
++                     'docs/OWNER-KEY.md')
++pins = {p.lower() for p in (args.pin, os.environ.get('UNIXNU_OWNER_KEY_SHA256')) if p}
++if not pins:
++    raise SystemExit('No pin: pass --pin or set UNIXNU_OWNER_KEY_SHA256 to the anchor digest of the intended key')
++kind = os.environ.get('UNIXNU_OWNER_KEY_KIND', 'owner')
++if kind not in ('owner', 'ephemeral'):
++    raise SystemExit(f'UNIXNU_OWNER_KEY_KIND={kind!r}: expected owner or ephemeral')
++
++spec = importlib.util.spec_from_file_location('vr_manifest', ROOT / 'kits/VerifiedRoot/tools/manifest.py')
++manifest = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(manifest)
++anchor = manifest.public_anchor(Path(public))
++if len(anchor) != 395:
++    raise SystemExit(f'anchor is {len(anchor)} bytes, VerifiedRoot expects 395')
++digest = hashlib.sha256(anchor).hexdigest()
++if digest not in pins:
++    raise SystemExit(f'owner key anchor sha256 {digest} is not the pinned {" / ".join(sorted(pins))}')
++
++out = ROOT / 'build/verified-root-key'
++out.mkdir(parents=True, exist_ok=True)
++(out / 'trusted-key.bin').write_bytes(anchor)
++assembly = out / 'key.S'
++assembly.write_text('// Generated: VerifiedRoot owner trust anchor (public key only)\n'
++                    '.section __DATA_CONST,__const\n.balign 8\n.globl _verified_root_key\n_verified_root_key:\n'
++                    f'.incbin "{out / "trusted-key.bin"}"\n')
++obj = out / 'key.o'
++if shutil.which('xcrun') and subprocess.run(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'],
++                                            capture_output=True).returncode == 0:
++    sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
++    compiler = ['xcrun', 'clang', '-isysroot', sdk]
++    ar = ['xcrun', 'ar']
++else:   # Linux toolchain (scripts/unixnu/kernel.py linux_env)
++    compiler = [os.environ.get('CROSS_CLANG', 'clang')]
++    ar = [shutil.which('llvm-ar') or 'ar']
++subprocess.run([*compiler, '-target', 'arm64-apple-ios17.0', '-c', str(assembly), '-o', str(obj)], check=True)
++data = obj.read_bytes()
++if struct.unpack_from('<4I', data) != (0xfeedfacf, 0x100000c, 0, 1):
++    raise SystemExit('key object is not an ordinary ARM64 Mach-O object')
++archive = out / 'libVerifiedRootKey.a'
++archive.unlink(missing_ok=True)
++subprocess.run([*ar, 'rcs', str(archive), str(obj)], check=True)
++(out / 'key.json').write_text(json.dumps(dict(
++    anchor_sha256=digest, anchor_bytes=len(anchor), kind=kind, symbol='_verified_root_key',
++    archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
++    boot_candidate=kind == 'owner'), indent=2) + '\n')
++print(f'libVerifiedRootKey.a: {kind} anchor {digest}')

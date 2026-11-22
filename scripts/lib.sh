@@ -12,15 +12,13 @@ die()  { printf '[%s] ERROR: %s\n' "$(date +%H:%M:%S)" "$*" >&2; printf 'log: %s
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed (scripts/wsl-setup.sh --install)"; }
 trap 'die "line $LINENO: \"$BASH_COMMAND\" failed"' ERR
 say "log: $LOG"
-apply_patches() {  # apply_patches TREE PATCHDIR: the series applied in order on the pinned commit, once
-	# A stamp (.git/hakios-patches) records the series' digest. When it differs, the tracked files go back to the pin
-	# (git checkout -f), files the series adds are removed, and the whole series is applied again in order.
+apply_patches() {  # apply_patches TREE PATCHDIR: the series applied in order on the pinned commit
+	# Every run puts the tracked files back to the pin (git checkout -f), removes the files the series adds and applies
+	# the whole series again in order. No shortcut: a stamp once said "applied" over a tree whose payload.py had been
+	# reset, and the dual-boot menu silently went missing. The stamp only records what was applied.
 	local tree=$1 dir=$2 patch stamp want
 	stamp=$(git -C "$tree" rev-parse --absolute-git-dir)/hakios-patches
 	want=$({ git -C "$tree" rev-parse HEAD; cat "$dir"/*.patch 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)   # the pin and the series
-	if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -z "$(git -C "$tree" status --porcelain --untracked-files=no | grep -v '^ M' || true)" ]; then
-		say "patches already applied to $(basename "$tree") ($(ls "$dir"/*.patch 2>/dev/null | wc -l))"; return 0
-	fi
 	git -C "$tree" checkout -q -f HEAD
 	for patch in "$dir"/*.patch; do
 		[ -e "$patch" ] || continue

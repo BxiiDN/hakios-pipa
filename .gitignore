@@ -19,3 +19,8 @@ identity.bin
 __pycache__/
 /build/
 /private/
+
+# owner keys: only the public half may be committed (docs/OWNER-KEY.md)
+*.pem
+*.key
+!owner/owner-public.pem

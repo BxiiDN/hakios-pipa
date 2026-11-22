@@ -33,6 +33,15 @@ jobs:
           pkgs=$(sed -n '/^PKGS=(/,/)$/p' scripts/wsl-setup.sh | tr -d '()' | sed 's/PKGS=//' | tr -s ' \n' ' ')
           sudo apt-get install --dry-run -y $pkgs > /dev/null
           echo "all $(echo $pkgs | wc -w) package names resolve"
+      - name: No private key in the repository (docs/OWNER-KEY.md)
+        run: |
+          if git grep -lE -- '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -- . ':!docs/OWNER-KEY.md' ':!.github/workflows/check.yml'; then
+            echo "::error::private key material is committed"; exit 1; fi
+          if [ -f owner/owner-public.pem ]; then
+            openssl pkey -pubin -in owner/owner-public.pem -noout -text | grep -q 'Public-Key: (3072 bit)' ||
+              { echo "::error::owner/owner-public.pem is not an RSA-3072 public key"; exit 1; }
+          fi
+          echo "no private key committed"
       - name: Tool versions
         run: scripts/wsl-setup.sh --report
       - name: Offline build and checks (scripts/build.sh)

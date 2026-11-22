@@ -19,6 +19,11 @@ have "payload volume (payload.img)" "$(first payload.img)"
 [ -n "$img" ] || img=$(first boot.img)
 have "boot image" "$img"
 have "iPadOS root image for the ipados partition" "$(first 'userdata-root*.img')"
+# the kernel must carry the owner's anchor: an ephemeral CI key (docs/OWNER-KEY.md) authorizes no root
+keyjson=$(first key.json)
+if [ -n "$keyjson" ] && python3 -c 'import json,sys; sys.exit(json.load(open(sys.argv[1])).get("kind") != "owner")' "$keyjson"; then
+	say "PRESENT  owner key anchor: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["anchor_sha256"])' "$keyjson")"
+else say "MISSING  owner key anchor (none, or the kernel was built with an ephemeral key)"; missing=$((missing + 1)); fi
 if [ $missing = 0 ]; then
 	# the image must be made of these very pieces, and they must be the ones this build recorded
 	manifest=$ROOT/logs/readiness-manifest.json
