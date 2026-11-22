@@ -1,0 +1,30 @@
+PASS     unit tests: partition validator, boot manager env, hardware facts
+PASS     firmware manifest verifier: self-test
+PASS     boot image verifier: unit tests
+PASS     git diff --check (committed tree and working tree; *.patch by .gitattributes)
+PASS     pipa device tree from Linux merged
+PASS     pipa package brought into the kernel checkout
+PASS     boards check (pipa + the kernel's own)
+PASS     pipa values still match Linux's tree
+PASS     kconfig check
+PASS     boot-args docs check
+PASS     HakiOS host tests (workbench/run.sh)
+PASS     UEFI loader (arch/arm64/boot/build.sh)
+PASS     UEFI loader rebuilt bit for bit
+PASS     U-Boot defconfig resolved by U-Boot's Kconfig (menu, keys, safety switches)
+PASS     UniXNU base pinned, iPadOS 17.7.11 profile on xnu-10063.141.1
+PASS     UniXNU-pipa board check and pipa driver host tests
+PASS     git diff --check of what patches/ produce in the three patched trees
+PASS     storage safety of the menu UniXNU's payload builder writes for pipa
+PASS     integration tests on UniXNU's real payload builder
+PASS     UFS root parser host test (RootLayout.h, patched)
+PASS     hardware facts of the published pipa tree (uefi-pipa) hold
+GAP      HakiOS's GPU driver is A660-family only (a650_check.py; docs/ADRENO650.md): known, not a build failure
+BLOCKED  U-Boot boot manager: aarch64-linux-gnu-gcc and flex needed (scripts/wsl-setup.sh --install)
+BLOCKED  HakiOS XNU kernel (xnu-12377): needs Apple's iPhoneOS SDK; not the iPadOS 17 base anyway (docs/BASE-DECISION.md)
+BLOCKED  UniXNU XNU 10063 kernel: needs UniXNU's Linux toolchain (scripts/wsl-setup.sh --unixnu-toolchain) and the iPadOS 17.7.11 IPSW inputs
+BLOCKED  iPadOS 17 user space / payload: needs the iPad7,1 17.7.11 IPSW members (./unixnu ipsw fetch) on your machine
+BLOCKED  QEMU boot: needs a kernel; no qemu-system-aarch64 here
+BLOCKED  anything on the tablet: this script never connects to it (docs/DUAL-BOOT.md)
+OFFLINE CHECKS: PASS
+READY FOR HARDWARE BOOT: NO (scripts/readiness.sh)
