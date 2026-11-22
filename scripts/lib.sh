@@ -17,7 +17,7 @@ apply_patches() {  # apply_patches TREE PATCHDIR: the series applied in order on
 	# (git checkout -f), files the series adds are removed, and the whole series is applied again in order.
 	local tree=$1 dir=$2 patch stamp want
 	stamp=$(git -C "$tree" rev-parse --absolute-git-dir)/hakios-patches
-	want=$({ cat "$dir"/*.patch 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
+	want=$({ git -C "$tree" rev-parse HEAD; cat "$dir"/*.patch 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)   # the pin and the series
 	if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -z "$(git -C "$tree" status --porcelain --untracked-files=no | grep -v '^ M' || true)" ]; then
 		say "patches already applied to $(basename "$tree") ($(ls "$dir"/*.patch 2>/dev/null | wc -l))"; return 0
 	fi

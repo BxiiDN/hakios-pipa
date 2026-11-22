@@ -20,19 +20,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # argument -> why it is refused (a callable gets the value)
-FORBIDDEN = {
-    'sheng-data-reset': 'clears the iPadOS Data store on storage',
-    'sheng-data-persist': lambda v: 'opens a write window on storage (mode 2)' if v == '2' else None,
-    'sheng-log': lambda v: 'opens the UFS log/export write window' if v not in ('', '0') else None,
-    'log': lambda v: 'starts the UFS log writer' if v not in ('', '0') else None,
+FORBIDDEN = {   # names without the sheng- prefix (args_of folds it)
+    'data-reset': 'clears the iPadOS Data store on storage',
+    'data-persist': lambda v: 'opens a write window on storage (mode 2)' if v == '2' else None,
+    'log': lambda v: 'opens the UFS log/export write window' if v not in ('', '0') else None,
 }
 WORDS = re.compile(r'erase|wipe|format|reset-data|data-reset', re.I)
 
 
 def args_of(line):
+    """Arguments by name, with UniXNU's two spellings folded together: 4a41c7e (2026-11-10) dropped the sheng- prefix
+    of every boot argument (sheng-data-persist is data-persist), and a driver of either age may read either."""
     out = {}
     for item in line.split():
         key, _, value = item.partition('=')
+        if key.startswith('sheng-'):
+            key = key[len('sheng-'):]
         out.setdefault(key, []).append(value)
     return out
 
@@ -44,7 +47,7 @@ def check_args(where, line, say):
         for value in values:
             why = rule(value) if callable(rule) else rule
             if why:
-                say('FAIL', f'{where}: {key}={value} {why}')
+                say('FAIL', f'{where}: {key}={value} (or sheng-{key}) {why}')
     if '1' in args.get('native-ufs-root', []):
         part = (args.get('native-ufs-root-part') or ['userdata'])[-1]
         if part == 'userdata':

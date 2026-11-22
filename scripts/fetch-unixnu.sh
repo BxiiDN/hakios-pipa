@@ -8,7 +8,7 @@ pin() {  # pin DIR URL REF
 	local dir=$WORK/$1
 	[ -d "$dir/.git" ] || { git init -q "$dir"; git -C "$dir" remote add origin "$2"; }
 	git -C "$dir" fetch -q --depth 1 origin "$3" || die "could not fetch $2 at $3"
-	git -C "$dir" checkout -q --detach FETCH_HEAD
+	git -C "$dir" checkout -q -f --detach FETCH_HEAD   # tracked files back to the pin; patches are re-applied below
 	[ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || die "$1 is not at $3"
 	say "$1: $3"
 }

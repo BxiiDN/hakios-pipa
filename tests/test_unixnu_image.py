@@ -82,8 +82,8 @@ class UniXNUImage(unittest.TestCase):
                              'confirm_titles = ["x"]\nconfirm_args = ["sheng-data-reset=1"]\ntype = "xnu"\n'
                              'path = "Payloads/kernel.macho"\nargs = "native-ufs-root=1 sheng-data-persist=2"\n')
         problems, _ = verdict(image(bad))
-        self.assertTrue(any('sheng-data-reset' in p for p in problems), problems)
-        self.assertTrue(any('sheng-data-persist=2' in p for p in problems), problems)
+        self.assertTrue(any('data-reset' in p for p in problems), problems)
+        self.assertTrue(any('data-persist=2' in p for p in problems), problems)
 
     def test_root_on_userdata_inside_the_image_fails(self):
         problems, _ = verdict(image(SAFE_MENU.replace(' native-ufs-root-part=ipados', '')))

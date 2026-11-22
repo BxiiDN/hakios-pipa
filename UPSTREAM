@@ -6,8 +6,11 @@ LINUX_REPOSITORY=https://github.com/torvalds/linux
 LINUX_REF=4843f6873f7c4835e62f2c73ba0fd538e57a2f22
 UEFI_REF=93e98ee8f8b9ca42f43dbbfd91b10566ba8d328c
 # iPadOS 17 base (docs/BASE-DECISION.md): UniXNU with the pipa device repository; uefi-pipa is its firmware.
+# UniXNU 62f203c (2026-11-09), the last commit before 4a41c7e dropped the sheng- prefix of every boot argument: the
+# port (EsaiJJ c4c1a3a) uses the sheng- names and its XNU patches have their context (docs/XNU-BUILD.md). 8542980
+# fails the port at preflight (ArmCpuSleep.h) and at pipa-cryptex-os-view-always.patch.
 UNIXNU_REPOSITORY=https://github.com/UniXNU/UniXNU
-UNIXNU_REF=8542980d02b4d2cc5c32ee3542de1760b2562aac
+UNIXNU_REF=62f203c23dc469e2988c3265d3fed93a706dc9ab
 PIPA_PORT_REPOSITORY=https://github.com/EsaiJJ/UniXNU-pipa
 PIPA_PORT_REF=c4c1a3a26cd45f75a718267f5ba77b2bc8ff4415
 PIPA_REFERENCE_REPOSITORY=https://github.com/xVanTuring/UniXNU-pipa

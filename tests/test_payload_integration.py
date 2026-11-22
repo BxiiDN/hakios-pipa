@@ -64,8 +64,16 @@ class RealPayloadMenu(unittest.TestCase):
             verdict, _, findings = self.safety.judge(self.build_menu(UNIXNU, port))
         self.assertEqual(verdict, 'FAIL')
         reasons = ' '.join(t for level, t in findings if level == 'FAIL')
-        for needle in ('sheng-data-reset', 'sheng-data-persist=2', "Android's userdata", 'install'):
+        for needle in ('data-reset', 'data-persist=2', "Android's userdata", 'install'):
             self.assertIn(needle, reasons)
+
+    def test_both_spellings_are_refused(self):
+        for bad in ('sheng-data-persist=2', 'data-persist=2', 'sheng-data-reset=1', 'data-reset=2', 'sheng-log=1', 'log=1'):
+            menu = {'boot': {'default': 'android', 'timeout': 10}, 'entry': [
+                {'id': 'android', 'type': 'action', 'action': 'reset'},
+                {'id': 'xnu', 'type': 'xnu', 'args': f'native-ufs-root=1 native-ufs-root-part=ipados {bad}'},
+                {'id': 'recovery', 'type': 'action', 'action': 'reset'}]}
+            self.assertEqual(self.safety.judge({'menu': menu, 'board': {}})[0], 'FAIL', bad)
 
     def test_tablet_gpt(self):
         userdata = {'name': 'userdata', 'first_lba': 0x293000, 'last_lba': 0x3b037fa}
