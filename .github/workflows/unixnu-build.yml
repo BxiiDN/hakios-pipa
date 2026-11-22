@@ -18,6 +18,7 @@ on:
       - UPSTREAM
       - patches/unixnu/**
       - patches/unixnu-pipa/**
+      - patches/diagnostic/**
       - scripts/fetch-unixnu.sh
       - scripts/lib.sh
       - tools/build_manifest.py
@@ -27,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: unixnu-build-${{ github.ref }}
+  group: unixnu-build-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -40,6 +41,15 @@ defaults:
 
 jobs:
   macos-kernel:
+    # pinned: exactly the pinned port with hakios-pipa's patches -- the deliverable; it fails while the port needs
+    #         inputs that are not public (docs/XNU-BUILD.md).
+    # diagnostic: the same plus patches/diagnostic (owner-root key archive left out, ArmCpuSleep.h added) to find the
+    #         next errors. Its output is never a candidate image.
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [pinned, diagnostic]
+    name: macos-kernel (${{ matrix.variant }})
     runs-on: macos-26
     timeout-minutes: 360
     env:
@@ -62,6 +72,9 @@ jobs:
         env:
           SKIP_UEFI_PIPA: '1'
         run: scripts/fetch-unixnu.sh
+      - name: Diagnostic patches (diagnostic variant only)
+        if: matrix.variant == 'diagnostic'
+        run: for p in patches/diagnostic/*.patch; do git -C "$HAKIOS_WORK/UniXNU-pipa" apply "$p" && echo "applied $p"; done
       - name: Defconfig, fetch, status
         working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
         env:
@@ -84,7 +97,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: kernel-logs-and-manifest
+          name: kernel-${{ matrix.variant }}-logs-and-manifest
           path: ${{ runner.temp }}/public/
           retention-days: 14
       - name: Remove proprietary inputs
@@ -118,6 +131,13 @@ jobs:
           ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
           ./unixnu fetch
           ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
+      - name: Mu_Basecore submodules the package build needs (package/build.sh says which)
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        run: |
+          for d in out/feeds/mu_basecore-*; do
+            git -C "$d" submodule update --init --depth 1 MdePkg/Library/BaseFdtLib/libfdt MdePkg/Library/MipiSysTLib/mipisyst \
+              BaseTools/Source/C/BrotliCompress/brotli
+          done
       - name: Build the UniXNU EFI package
         id: package
         working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
