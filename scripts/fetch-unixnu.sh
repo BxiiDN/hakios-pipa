@@ -7,7 +7,12 @@ mkdir -p "$WORK"
 pin() {  # pin DIR URL REF
 	local dir=$WORK/$1
 	[ -d "$dir/.git" ] || { git init -q "$dir"; git -C "$dir" remote add origin "$2"; }
-	git -C "$dir" fetch -q --depth 1 origin "$3" || die "could not fetch $2 at $3"
+	local try   # GitHub answers 403 now and then (run 45080236671): three tries, 10 s and 30 s apart
+	for try in 1 2 3; do
+		git -C "$dir" fetch -q --depth 1 origin "$3" && break
+		[ $try = 3 ] && die "could not fetch $2 at $3"
+		say "fetch of $2 failed (try $try), retrying"; sleep $((try == 1 ? 10 : 30))
+	done
 	git -C "$dir" checkout -q -f --detach FETCH_HEAD   # tracked files back to the pin; patches are re-applied below
 	[ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || die "$1 is not at $3"
 	say "$1: $3"
