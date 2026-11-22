@@ -22,10 +22,11 @@ Dua status terpisah, tidak pernah disamakan:
 | Loader UEFI HakiOS reproducible | PASS | SHA-256 sama dua build |
 | `git diff --check` (tree ter-commit + kerja) | PASS setelah commit sesi 3 | `scripts/build.sh` |
 | Kompilasi U-Boot pipa (GitHub Actions, gcc 13.3, flex 2.6.4), dua build bersih | **PASS**: `u-boot.bin` `f6faf8e0…` (1 526 152 B), `u-boot` ELF `6bb971b1…`, DTB pipa `7c3faf93…`, image `hakios-pipa-bootmgr.img` `fa2c0951…` (776 192 B, header v1, page 2048); kedua build identik; tidak ada unresolved symbol; `.config`, env menu terkompilasi, DTB `xiaomi,pipa` dicek. **Menu belum dilihat di tablet** | [run 45073781629](https://github.com/BxiiDN/hakios-pipa/actions/runs/45073781629) |
-| Paket EFI UniXNU (macos-26) | **PASS**: `UniXNU.efi` `66f43d77…` (95 232 B), `UniXNUDxe.efi` `c9537e2d…` (14 336 B), `UniXNURamDiskDxe.efi` `c9732e15…` (16 896 B) | run 45077836807 |
+| Paket EFI UniXNU (macos-26, UniXNU `62f203c`) | **PASS**: `UniXNU.efi` `a2ceaf758c2b5892…` (95 232 B), `UniXNUDxe.efi` `1c54e08805827dd8…` (14 336 B), `UniXNURamDiskDxe.efi` `7d7375701159ebc4…` (15 360 B) | run 45081127559 |
+| Toolchain Linux UniXNU (ubuntu-24.04) | **PASS** + `--check`: clang 24.0.0git `58c46bae` `602430b2…`, ld64 `c4fa3cd1…`, migcom `a080a836…`, iig `64d7b95c…`, lzfse `73d68a52…` | run 45077836807 |
 | Kernel XNU 10063 | **FAIL**: preflight, 64 patch XNU, compile bootstrap dan 7 archive PASS; berhenti di `ShengHidInput` (kandidat referensi prelink tidak ada) | [XNU-BUILD.md](XNU-BUILD.md) |
 | Link final + prelink kernel | **BLOCKED** oleh baris di atas | — |
-| Firmware uefi-pipa | **FAIL** (submodule brotli MdeModulePkg, sudah diperbaiki) lalu fetch 403 sementara (retry ditambahkan); hasil berikutnya belum ada | run 45077836807, 45080236671 |
+| Firmware uefi-pipa (Mu-Silicium pipaPkg + UniXNU + DarwinBoot, CLANGPDB DEBUG) | **PASS (build)**: `SILICIUM_UEFI.fd` `bb3da32b80e2da57…` (3 145 728 B). Tidak dijalankan di tablet maupun QEMU | [run 45081127559](https://github.com/BxiiDN/hakios-pipa/actions/runs/45081127559) |
 | Payload, boot image, root image | **BLOCKED** (butuh kernel + firmware) | — |
 | Validator userland iPadOS 17 (`tools/userland_check.py`) | Alat + test PASS; **NOT RUN** pada IPSW (tidak diunduh di sesi ini) | — |
 | `A650GmuTests` | **NOT RUN** (butuh `kits/AdrenoFirmware`; menjalankannya ditolak pengaman sesi 2, tidak diulang) | — |
@@ -51,7 +52,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Tombol | PARTIAL | Host test PASS |
 | Storage UFS | PARTIAL | Root dipindah ke `ipados`; menurut source tidak ada tulis ke `userdata` |
 | U-Boot | PARTIAL | Kompilasi + reproducible PASS di CI; belum diuji di tablet |
-| UEFI (uefi-pipa) | FAIL → diperbaiki, menunggu CI | Paket EFI UniXNU PASS |
+| UEFI (uefi-pipa) | PARTIAL | Build PASS di CI; belum dijalankan di tablet |
 | Android boot | NOT TESTED | Tidak diubah |
 | iPadOS boot / userland / SpringBoard | BLOCKED | Kernel dan IPSW |
 | Dual boot MODE A | PARTIAL | Menu Android-first dari builder asli, offline |
