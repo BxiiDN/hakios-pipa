@@ -1,0 +1,16 @@
+PASS     pipa partition validator: unit tests
+PASS     boot image verifier: unit tests
+PASS     pipa device tree from Linux merged
+PASS     pipa package brought into the kernel checkout
+PASS     boards check (pipa + the kernel's own)
+PASS     pipa values still match Linux's tree
+PASS     kconfig check
+PASS     boot-args docs check
+NOT RUN  HakiOS host tests (workbench/run.sh): SKIP_UPSTREAM_TESTS=1 (CI runs them as their own job)
+PASS     UEFI loader (arch/arm64/boot/build.sh)
+PASS     UEFI loader rebuilt bit for bit
+BLOCKED  U-Boot boot manager: aarch64-linux-gnu-gcc and flex needed (scripts/wsl-setup.sh --install)
+BLOCKED  XNU kernel: needs Apple's iPhoneOS SDK (IPHONEOS_SDK=...): not redistributable, not in this repository
+BLOCKED  Darwin user space image: needs an IPSW you are entitled to use; HakiOS main targets Darwin 26/27, not iPadOS 17 (docs/IPADOS17.md)
+BLOCKED  QEMU boot: needs the kernel above; then: cd $HAKIOS_WORK/hakios-xnu-kernel && make qemu
+BLOCKED  anything on the tablet: this script never connects to it (docs/DUAL-BOOT.md)

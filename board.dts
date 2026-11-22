@@ -1,0 +1,33 @@
+/dts-v1/;
+
+// Xiaomi Pad 6 (pipa). Started by tools/boards.py new from pipa-merged.dts.
+// Every value here is to be checked against the device before it is relied on (Documentation/porting.md).
+/ {
+	name = "pipa";                          // what the loader puts in /chosen/darwin-board
+	description = "Xiaomi Pad 6 (pipa)";
+	soc = "sm8250";
+
+	// Nothing yet: a feature is listed once its driver has been seen to work on this board
+	// (Documentation/porting.md goes through them in the order to try).
+	features = <>;
+
+	backlight {
+		type = "soft";
+	};
+
+	// The keys on the PMICs, for the feature "buttons-pmic": SPMI slave << 8 | the high byte of the
+	// peripheral's registers.
+	buttons {
+		pon = <0x008>;
+		pon-name = "the PM8150's power-on block";
+		volume-up = <0x0c5>;
+		volume-up-name = "GPIO6 of the PM8150";
+	};
+
+	// The PMIC's real-time clock, read once at boot (rtc=0 leaves it alone): SPMI slave << 8 | the high byte
+	// of its RTC_RW block's registers.
+	rtc {
+		peripheral = <0x060>;
+		name = "the PM8150's RTC";
+	};
+};

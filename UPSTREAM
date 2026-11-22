@@ -1,0 +1,7 @@
+# The HakiOS kernel this package is checked and built against. Bump on purpose, after scripts/build.sh passes.
+KERNEL_REPOSITORY=https://github.com/oosexgang/hakios-xnu-kernel
+KERNEL_REF=62e09f850f1f713192228cb9031da256033ede93
+UEFI_REPOSITORY=https://github.com/oosexgang/hakios-uefi
+LINUX_REPOSITORY=https://github.com/torvalds/linux
+LINUX_REF=4843f6873f7c4835e62f2c73ba0fd538e57a2f22
+UEFI_REF=93e98ee8f8b9ca42f43dbbfd91b10566ba8d328c

@@ -1,0 +1,49 @@
+# Every push: the pipa package held to the pinned HakiOS kernel's own checks, this repository's tools tested, the
+# loader built twice and compared. Nothing here talks to a tablet. The XNU kernel and Darwin are not built: they
+# need Apple's SDK and an IPSW, which a public CI must not have (docs/STATUS.md).
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pipa:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Host packages
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm gcc-aarch64-linux-gnu flex bison libssl-dev bc
+      - name: Offline build and checks (scripts/build.sh)
+        env:
+          HAKIOS_WORK: ${{ runner.temp }}/hakios-work
+          SKIP_UPSTREAM_TESTS: '1'
+        run: scripts/build.sh
+      - name: Preflight (no tablet)
+        run: scripts/preflight.sh || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs
+          path: logs/
+
+  # The pinned kernel's own host tests. At 62e09f8 two of them fail upstream (links to arch/arm64/boot/uefi/, which
+  # that commit moved out), with or without this package: reported here, not hidden, and not blocking.
+  upstream-host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: Kernel at the pinned commit, pipa brought in, its tests
+        env:
+          HAKIOS_WORK: ${{ runner.temp }}/hakios-work
+        run: |
+          scripts/fetch-upstream.sh
+          cd "$HAKIOS_WORK/hakios-xnu-kernel"
+          python3 tools/device.py add --from "$GITHUB_WORKSPACE"
+          workbench/run.sh
