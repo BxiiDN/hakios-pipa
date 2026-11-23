@@ -1,0 +1,64 @@
+diff --git a/drivers/ShengUfs/NativeUfs.cpp b/drivers/ShengUfs/NativeUfs.cpp
+index b36806e..9bd3a60 100644
+--- a/drivers/ShengUfs/NativeUfs.cpp
++++ b/drivers/ShengUfs/NativeUfs.cpp
+@@ -2436,7 +2436,6 @@ void NativeUfs::stop (IOService *provider)
+ #include <IOKit/IOBSD.h>
+ #include <sys/param.h>
+ 
+-static constexpr size_t kDigestBytes = 48;
+ 
+ extern "C" {
+ int native_ufs_block_authenticates(IOService *provider, const char *uuid, uint8_t *digest);
+@@ -2469,6 +2468,12 @@ extern "C" int native_ufs_block_authenticates(IOService *provider, const char *u
+ }
+ #endif
+ 
++// pipa bring-up root query. With NATIVE_VERIFIED_BLOCK the Verified VirtioMmioBlock archive defines these three
++// entry points and authenticates the root through native_ufs_block_authenticates against the owner-signed
++// policy. This copy, which also accepts three hardcoded UUIDs with a synthesized manifest digest when that
++// authentication fails, must not be linked then: it would duplicate the symbols and bypass the signed root.
++#if !defined(NATIVE_VERIFIED_BLOCK) || !NATIVE_VERIFIED_BLOCK
++static constexpr size_t kDigestBytes = 48;
+ static int verifiedVolumeQuery(dev_t device, const char *expectedUUID, uint8_t *manifestDigest)
+ {
+     OSDictionary *matching = IOService::serviceMatching("IOMedia");
+@@ -2579,3 +2584,4 @@ extern "C" int native_verified_block_volume_device(const char *uuid, dev_t *devi
+     strlcpy(path, candidatePath, size);
+     return 1;
+ }
++#endif // !NATIVE_VERIFIED_BLOCK
+diff --git a/scripts/build-arm-driver.py b/scripts/build-arm-driver.py
+index 8bc7130..299586c 100644
+--- a/scripts/build-arm-driver.py
++++ b/scripts/build-arm-driver.py
+@@ -103,6 +103,16 @@ if component in ('NativeVirtioBlock', 'NativeRamBlock', 'NativeUfs'):
+         command += ['-DNATIVE_VERIFIED_BLOCK_MULTI_POLICY=1']
+ if component == 'NativeUfs':
+     command += ['-I', str(ROOT / 'drivers' / directory), '-mgeneral-regs-only']
++    # The component recipe (component:ShengUfs) passes no --verified-root, and that flag is refused for anything but
++    # NativeVirtioBlock. Without NATIVE_VERIFIED_BLOCK, NativeUfs publishes the root windows unverified and its
++    # authentication query falls back to accepting known UUIDs. When the board selects the owner-verified root
++    # (CONFIG_XNU_VERIFIED_ROOT_PROBE=y, the anchor archive build/verified-root-key), compile the verified path, so
++    # every root read is checked against the owner-signed OS/SystemOS policies.
++    config = ROOT.parent / '.config'
++    if config.is_file() and 'CONFIG_XNU_VERIFIED_ROOT_PROBE=y' in config.read_text().splitlines():
++        # VerifiedBlockPolicy.h (the policy row type) lives with the Verified VirtioMmioBlock driver.
++        command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-I', str(ROOT / 'drivers/VirtioMmioBlock'),
++                    '-DNATIVE_VERIFIED_BLOCK=1']
+ if component=='NativeOfflineGPU':
+     command += ['-I',str(ROOT/'drivers/VirtioMmioConsole')]
+ if component in ('NativeLegacyDisplay','NativeHidInput'):
+@@ -120,7 +130,11 @@ check_object(destination.read_bytes(), component)
+ extra_objects = []
+ if component == 'NativeUfs':
+     storage_source = ROOT / 'refer/IOStorageFamily/IOBlockStorageDevice.cpp'
+-    if storage_source.is_file():
++    # NativeUfs derives from the original IOBlockStorageDevice of the kernelcache's IOStorageFamily. When the storage
++    # interface audit has run, the Verified VirtioMmioBlock and RamBlock archives already alias that original class
++    # (original-bindings.o); compiling the public source as well defines the class twice at link time and would
++    # register a second IOBlockStorageDevice metaclass at run time. Only a build without the audit uses the source.
++    if storage_source.is_file() and not (ROOT / 'build/storage-abi/interface-audit.json').is_file():
+         storage_dest = out / 'IOBlockStorageDevice.o'
+         storage_cmd = [str(storage_source) if arg == str(source) else str(storage_dest) if arg == str(destination) else arg for arg in command]
+         storage_cmd = [arg for arg in storage_cmd if not arg.startswith('-DNATIVE_VERIFIED_BLOCK')]

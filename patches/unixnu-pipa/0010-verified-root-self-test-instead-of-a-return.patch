@@ -1,0 +1,158 @@
+diff --git a/package/PipaVerifiedRootSelfTest.c b/package/PipaVerifiedRootSelfTest.c
+new file mode 100644
+index 0000000..e3e99e6
+--- /dev/null
++++ b/package/PipaVerifiedRootSelfTest.c
+@@ -0,0 +1,66 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++/* native_verified_root_probe(): the owner-root self-test bsd_init runs with the boot-arg offline-owner-root-check=1.
++ * UniXNU's QEMU probe (scripts/qemu-entry/verified-root-probe.c) checks sample blocks against a full hash table embedded
++ * in the kernel; pipa embeds only the 544-byte header-only policies (the tables live in the root image, NativeUfs checks
++ * every read against them), so this self-test exercises what the kernel holds: each embedded policy must authenticate
++ * under the embedded owner anchor with the kernel's own RSA-3072/SHA-256 (vr_xnu_crypto), and every tampered variant
++ * must be refused. Results: pipa_verified_root_selftest[] and one log line. Reads and copies only; changes nothing. */
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++#include "verified_root.h"
++
++#ifdef PIPA_SELFTEST_HOST
++#include <stdio.h>
++#define SELFTEST_LOG printf
++#else
++extern int printf(const char *, ...);
++#define SELFTEST_LOG printf
++#endif
++
++struct pipa_root_policy { const uint8_t *manifest; uint64_t bytes; };
++extern const uint8_t verified_root_key[VR_KEY_BYTES];
++extern const struct pipa_root_policy verified_root_policies[];
++extern const uint64_t verified_root_policy_count;
++extern const struct vr_crypto vr_xnu_crypto;
++
++/* [0] policies, [1] authenticated, [2] tampered signatures refused, [3] tampered headers refused,
++ * [4] wrong keys refused, [5] wrong lengths refused, [6] 1 when every check held, [7] last failing policy + 1 */
++volatile uint32_t pipa_verified_root_selftest[8];
++
++static uint8_t copy[VR_HEADER_BYTES + VR_SIGNATURE_BYTES], key[VR_KEY_BYTES];
++
++void native_verified_root_probe(void)
++{
++    volatile uint32_t *r = pipa_verified_root_selftest;
++    struct vr_view view;   /* minimum generation 1: the kit refuses 0, and every pipa policy has generation >= 1 */
++    uint64_t n = verified_root_policy_count;
++    for (int i = 0; i < 8; i++) r[i] = 0;
++    r[0] = (uint32_t)n;
++    for (uint64_t i = 0; i < n; i++) {
++        const struct pipa_root_policy *p = &verified_root_policies[i];
++        int ok = p->bytes == sizeof(copy);
++        if (ok && vr_open_header(p->manifest, (size_t)p->bytes, verified_root_key, 1, &vr_xnu_crypto, &view) == VR_OK) r[1]++;
++        else ok = 0;
++        if (ok) {
++            memcpy(copy, p->manifest, sizeof(copy));
++            copy[VR_HEADER_BYTES + 17] ^= 0x01;                       /* one signature bit */
++            if (vr_open_header(copy, sizeof(copy), verified_root_key, 1, &vr_xnu_crypto, &view) == VR_SIGNATURE) r[2]++;
++            else ok = 0;
++            memcpy(copy, p->manifest, sizeof(copy));
++            copy[56] ^= 0x01;                                         /* one bit of the signed image digest */
++            if (vr_open_header(copy, sizeof(copy), verified_root_key, 1, &vr_xnu_crypto, &view) != VR_OK) r[3]++;
++            else ok = 0;
++            memcpy(key, verified_root_key, sizeof(key));
++            key[100] ^= 0x01;                                         /* another owner's modulus */
++            if (vr_open_header(p->manifest, (size_t)p->bytes, key, 1, &vr_xnu_crypto, &view) != VR_OK) r[4]++;
++            else ok = 0;
++            if (vr_open_header(p->manifest, (size_t)p->bytes - 1, verified_root_key, 1, &vr_xnu_crypto, &view) == VR_FORMAT) r[5]++;
++            else ok = 0;
++        }
++        if (!ok && !r[7]) r[7] = (uint32_t)(i + 1);
++    }
++    r[6] = n > 0 && r[1] == n && r[2] == n && r[3] == n && r[4] == n && r[5] == n;
++    SELFTEST_LOG("pipa owner-root self-test: %s (policies %u, authenticated %u, refused sig %u hdr %u key %u len %u)\n",
++                 r[6] ? "PASS" : "FAIL", r[0], r[1], r[2], r[3], r[4], r[5]);
++}
+diff --git a/scripts/build-verified-root-key.py b/scripts/build-verified-root-key.py
+index d18af34..64ef5b8 100755
+--- a/scripts/build-verified-root-key.py
++++ b/scripts/build-verified-root-key.py
+@@ -95,19 +95,18 @@ if policy_dir:
+               '_verified_root_manifest_bytes:', f'.quad {HEADER_BYTES + SIGNATURE_BYTES}',
+               '.globl _verified_root_policies, _verified_root_policy_count', '_verified_root_policies:']
+     lines += [f'.quad _pipa_root_policy_{i}, {HEADER_BYTES + SIGNATURE_BYTES}' for i in range(len(records))]
+-    lines += ['_verified_root_policy_count:', f'.quad {len(records)}',
+-              # bsd_init calls native_verified_root_probe() only with the boot-arg offline-owner-root-check, UniXNU's
+-              # QEMU self-test of the kit on embedded sample blocks. pipa never sets it and checks every root read in
+-              # NativeUfs, so here the hook returns at once. (CONFIG_XNU_VERIFIED_ROOT_PROBE links the call.)
+-              '.section __TEXT,__text,regular,pure_instructions', '.balign 4',
+-              '.globl _native_verified_root_probe', '_native_verified_root_probe:', 'ret', '']
++    lines += ['_verified_root_policy_count:', f'.quad {len(records)}', '']
++    # native_verified_root_probe (bsd_init, boot-arg offline-owner-root-check) is package/PipaVerifiedRootSelfTest.c,
++    # compiled below with the kit: the embedded policies must authenticate and every tampered variant be refused.
+     assembly.write_text(assembly.read_text() + '\n'.join(lines))
+ subprocess.run([*compiler, '-target', 'arm64-apple-ios17.0', '-c', str(assembly), '-o', str(obj)], check=True)
+ objects = [obj]
+ if policy_dir:
+     recipe = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json'
+     record = json.loads(recipe.read_text().strip().rstrip(','))
+-    for source in (ROOT / 'kits/VerifiedRoot/src/verified_root.c', ROOT / 'kits/VerifiedRoot/adapters/xnu_crypto.c'):
++    for source in (ROOT / 'kits/VerifiedRoot/src/verified_root.c', ROOT / 'kits/VerifiedRoot/adapters/xnu_crypto.c',
++                   # the device package (package/ of the port) sits in the tree at kits/<device>/
++                   next(ROOT.glob('kits/*/PipaVerifiedRootSelfTest.c'))):
+         destination = out / (source.stem + '.o')
+         arguments, command, index = record['arguments'], [], 0
+         while index < len(arguments):   # XNU's own compile record, its warning flags replaced by ours
+diff --git a/tests/pipa-verified-root-selftest-host.c b/tests/pipa-verified-root-selftest-host.c
+new file mode 100644
+index 0000000..e39d106
+--- /dev/null
++++ b/tests/pipa-verified-root-selftest-host.c
+@@ -0,0 +1,50 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++/* Host test of package/PipaVerifiedRootSelfTest.c with the real kit and an OpenSSL crypto provider (RSA-3072 PKCS#1 v1.5
++ * over SHA-256, as kits/VerifiedRoot/tools/manifest.py signs).
++ *   cc -DPIPA_SELFTEST_HOST -I kits/VerifiedRoot/include package/PipaVerifiedRootSelfTest.c \
++ *      kits/VerifiedRoot/src/verified_root.c tests/pipa-verified-root-selftest-host.c -lcrypto
++ *   ./a.out trusted-key.bin OS/manifest.bin SystemOS/manifest.bin      (exit 0 = the self-test reports PASS) */
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <openssl/evp.h>
++#include <openssl/rsa.h>
++#include <openssl/bn.h>
++#include <openssl/core_names.h>
++#include <openssl/param_build.h>
++#include "verified_root.h"
++
++struct pipa_root_policy { const uint8_t *manifest; uint64_t bytes; };
++uint8_t verified_root_key[VR_KEY_BYTES];
++struct pipa_root_policy verified_root_policies[4];
++uint64_t verified_root_policy_count;
++extern volatile uint32_t pipa_verified_root_selftest[8];
++void native_verified_root_probe(void);
++
++static int sha256(const void *p, size_t n, uint8_t out[32]) { unsigned len = 0; return EVP_Digest(p, n, out, &len, EVP_sha256(), NULL) && len == 32; }
++static int rsa(const uint8_t key[VR_KEY_BYTES], const uint8_t digest[32], const uint8_t sig[VR_SIGNATURE_BYTES])
++{
++    if (memcmp(key, "VROOTKEY", 8)) return 0;
++    BIGNUM *n = BN_bin2bn(key + 8, 384, NULL), *e = BN_bin2bn(key + 392, 3, NULL);
++    OSSL_PARAM_BLD *b = OSSL_PARAM_BLD_new(); OSSL_PARAM_BLD_push_BN(b, OSSL_PKEY_PARAM_RSA_N, n); OSSL_PARAM_BLD_push_BN(b, OSSL_PKEY_PARAM_RSA_E, e);
++    OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(b); EVP_PKEY_CTX *c = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL); EVP_PKEY *k = NULL;
++    EVP_PKEY_fromdata_init(c); EVP_PKEY_fromdata(c, &k, EVP_PKEY_PUBLIC_KEY, params);
++    EVP_PKEY_CTX *v = EVP_PKEY_CTX_new(k, NULL); int ok = EVP_PKEY_verify_init(v) == 1 && EVP_PKEY_CTX_set_rsa_padding(v, RSA_PKCS1_PADDING) == 1
++        && EVP_PKEY_CTX_set_signature_md(v, EVP_sha256()) == 1 && EVP_PKEY_verify(v, sig, VR_SIGNATURE_BYTES, digest, 32) == 1;
++    EVP_PKEY_CTX_free(v); EVP_PKEY_free(k); EVP_PKEY_CTX_free(c); OSSL_PARAM_free(params); OSSL_PARAM_BLD_free(b); BN_free(n); BN_free(e);
++    return ok;
++}
++const struct vr_crypto vr_xnu_crypto = {sha256, rsa};
++
++static uint8_t *slurp(const char *path, size_t *n) { FILE *f = fopen(path, "rb"); if (!f) { perror(path); exit(2); }
++    fseek(f, 0, SEEK_END); *n = (size_t)ftell(f); rewind(f); uint8_t *p = malloc(*n); if (fread(p, 1, *n, f) != *n) exit(2); fclose(f); return p; }
++
++int main(int argc, char **argv)
++{
++    if (argc < 3 || argc > 6) { fprintf(stderr, "usage: %s trusted-key.bin manifest.bin...\n", argv[0]); return 2; }
++    size_t n; uint8_t *k = slurp(argv[1], &n); if (n != VR_KEY_BYTES) return 2; memcpy(verified_root_key, k, n);
++    for (int i = 2; i < argc; i++) { verified_root_policies[i - 2].manifest = slurp(argv[i], &n); verified_root_policies[i - 2].bytes = n; }
++    verified_root_policy_count = (uint64_t)(argc - 2);
++    native_verified_root_probe();
++    return pipa_verified_root_selftest[6] ? 0 : 1;
++}

@@ -1,0 +1,957 @@
+diff --git a/drivers/GopFramebuffer/NativeLegacyDisplay.cpp b/drivers/GopFramebuffer/NativeLegacyDisplay.cpp
+index 2088bee..ddbfa7e 100644
+--- a/drivers/GopFramebuffer/NativeLegacyDisplay.cpp
++++ b/drivers/GopFramebuffer/NativeLegacyDisplay.cpp
+@@ -67,6 +67,8 @@ static void noteSurface(OSObject *surface,IOMemoryDescriptor *memory)
+ extern "C" void native_legacy_gpu_fallback_observed(int status);
+ // Swaps retired when the GPU client took the frame (before its copy finished), and copies that then failed after such a retirement.
+ extern "C" {volatile uint64_t native_legacy_early_retires,native_legacy_early_failures;}
++// Swap cancels the family asked for (slot 345, after a 5 s swap wait timeout).
++extern "C" {volatile unsigned native_legacy_swap_cancels;}
+ // Display refresh tick (boot-arg sheng-vsync=<Hz>, 0 or absent: off). The original family sends the compositor's vsync message (type 5)
+ // through native_legacy_vsync_notify, the unchanged original sender, but only a platform subclass calls it from the panel's vblank and
+ // that subclass is not part of this port: without it the render server never saw a vsync. The GOP scanout has no vblank interrupt, so a
+@@ -586,6 +588,21 @@ public:
+         transferred=false;
+         kickSwapQueue();
+     }
++    // Slot 345: the family's swap_wait_gated (IOMobileFramebufferLegacy) calls this after 5 s without a swap completion, logs
++    // "cancelling swaps" and then releases its own queue (slots 346, 241, 218). AppleCLCD stops its hardware here; this driver has
++    // no hardware queue, only its own in-flight state, which must not outlive the family's requests: a render server that died
++    // mid-frame (tests 28v2b/28v3/28v4: backboardd abort) left a transfer latched, so its successor's first swap was validated
++    // but never copied, the wait timed out, and the former panic guard in this slot stopped the kernel. Nothing is retired here
++    // (the family does that next); the scanout goes back to the boot memory because the released surfaces may be freed.
++    void cancelSwapsHook() override {
++        native_legacy_swap_cancels=native_legacy_swap_cancels+1;
++        if(latchTimer)latchTimer->cancelTimeout();
++        latchRequest=nullptr;pendingSlot=-1;
++        directToBoot();
++        IOLog("[xnu] display: swap cancel #%u (transferred %d, gpu %d, early %d)\n",native_legacy_swap_cancels,transferred?1:0,
++              gpuRequest?1:0,gpuRetired?1:0);
++        transferred=false;for(auto &entry: validated)entry=nullptr;gpuRequest=nullptr;gpuRetired=false;
++    }
+     IOReturn collectCompletionReports(uint32_t,void *,uint32_t *count,uint32_t) override {
+         // The original completion helper passes null optional outputs and
+         // ignores this IOReturn. GOP exposes no hardware completion telemetry.
+@@ -702,7 +719,6 @@ public:
+     LEAF(306)
+     LEAF(307)
+     LEAF(338)
+-    LEAF(345)
+ #undef LEAF
+ };
+ OSDefineMetaClassAndStructors(NativeLegacyDisplay,IOMobileFramebufferLegacy)
+diff --git a/package/BacklightProbe.c b/package/BacklightProbe.c
+new file mode 100644
+index 0000000..c7745d3
+--- /dev/null
++++ b/package/BacklightProbe.c
+@@ -0,0 +1,305 @@
++// SPDX-License-Identifier: BSD-2-Clause-Patent
++// pipa backlight, step 1 (pipa-bl-probe=1; =2 adds the read-only I2C step 2, =3 the brightness write test 3a): READ-ONLY state of the path to the KTZ8866 backlight controller, which sits at
++// I2C address 0x11 on QUP SE11 (stock dtbo: qupv3_se11_i2c, i2c@a8c000; HWEN gpio139, ENP gpio130, ENN gpio131). Nothing is
++// written anywhere: this logs whether the bootloader left the SE11 clocks on, how the serial engine is set up (protocol, clock
++// divider, SCL counters) and how its pins gpio60/61 are muxed, so the I2C master that comes next follows that state instead of
++// guessed values.
++//
++// Register offsets are those of the Linux v6.12 sources, read for this (no code copied):
++//   drivers/clk/qcom/gcc-sm8250.c   gcc_qupv3_wrap1_s3_clk halt 0x1839c (i2c11 uses GCC_QUPV3_WRAP1_S3_CLK in sm8250.dtsi),
++//                                   wrap_1_m_ahb 0x18004, wrap_1_s_ahb 0x18008, wrap1_core 0x23138, wrap1_core_2x 0x23140,
++//                                   all voted in 0x52008 (bits 25, 20, 21, 19, 18); a branch's CBCR bit 31 is CLK_OFF.
++//   arch/arm64/boot/dts/qcom/sm8250.dtsi   gcc at 0x100000, tlmm "south" tile at 0x0f500000.
++//   drivers/pinctrl/qcom/pinctrl-sm8250.c  gpio60/61 SOUTH, qup11 is function 1; ctl at 0x1000 * n, io at + 4.
++//   include/linux/soc/qcom/geni-se.h, drivers/i2c/busses/i2c-qcom-geni.c   SE register offsets.
++// The SE registers are read only when all five clocks are voted and either running or in hardware clock gating: an access to
++// an unclocked serial engine can abort.
++#include <stdint.h>
++
++extern uint64_t ml_io_map(uint64_t phys_addr, uint64_t size);
++extern int PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
++extern int kernel_thread_start(void (*continuation)(void *, int), void *parameter, void **new_thread);
++extern void thread_deallocate(void *thread);
++extern void IOSleep(unsigned milliseconds);
++extern int printf(const char *, ...);
++
++#define GCC_BASE 0x00100000ull
++#define TLMM_SOUTH 0x0f500000ull
++#define SE11_BASE 0x00a8c000ull
++
++static uint32_t rd(uint64_t phys) {
++    uint64_t page = ml_io_map(phys & ~0xfffull, 0x1000);
++    if (!page) return 0xdeadbeefu;
++    return *(volatile uint32_t *)(uintptr_t)(page + (phys & 0xfff));
++}
++
++volatile uint32_t native_backlight_probe_state;   // 0 not run, 1 clocks off (SE not read), 2 SE read, 3 KTZ8866 read, 4 I2C failed, 5 write test passed
++static unsigned probe_level;
++
++extern void IODelay(unsigned microseconds);
++
++// ---- step 2 (pipa-bl-probe=2): GENI I2C master in FIFO mode, polled, READS ONLY from the KTZ8866 ----
++// Register semantics from Linux v6.12 include/linux/soc/qcom/geni-se.h, drivers/soc/qcom/qcom-geni-se.c and
++// drivers/i2c/busses/i2c-qcom-geni.c (read for this; no code copied). Values written to the serial engine, all as Linux's
++// probe + qcom_geni_i2c_conf would for a 100 kHz bus (the stock pipa DT sets no clock-frequency on i2c@a8c000; 100 kHz is
++// mainline's default):
++//   GENI_CGC_CTRL 0x28 |= 0x7f, SE_DMA_GENERAL_CFG 0xe30 |= 0xf, GENI_OUTPUT_CTRL 0x24 = 0x7f, GENI_FORCE_DEFAULT 0x20 = 1,
++//   RX watermark 0x810 = depth-1, RX RFR 0x814 = depth, M_IRQ_EN 0x614 |= common errors + CMD_DONE + RX watermark/last,
++//   DMA_MODE_EN 0x258 = 0 (FIFO), packing 8 bits x 4, MSB first: TX/RX_PACKING_CFG0 0x7f8fe, CFG1 0xffefe, BYTE_GRAN 0,
++//   CLK_SEL 0, SER_M_CLK_CFG (7 << 4) | 1, SCL_COUNTERS (10 << 20) | (11 << 10) | 26 (geni_i2c_clk_map, 19.2 MHz source).
++// SE_IRQ_EN (0xe1c, the line to the GIC) is not touched: the transfer is polled. Only proceeds when the wrap1_s3 RCG runs from
++// the 19.2 MHz XO (CFG 0x183a4: SRC_SEL 0, divider bypass/1, no M/N), the engine is idle and protocol 3 (I2C) is loaded.
++#define SE_REG(off) (*(volatile uint32_t *)(uintptr_t)(se + (off)))
++#define KTZ_ADDR 0x11u
++#define I2C_OP_WRITE 1u
++#define I2C_OP_READ 2u
++#define I2C_STOP_STRETCH (1u << 2)
++#define M_CMD_DONE (1u << 0)
++// as geni_i2c_irq: a transfer failed when CMD_OVERRUN/ILLEGAL_CMD/CMD_FAILURE/CMD_ABORT is set; GP_IRQ1/3/4 say why
++#define M_ERRORS ((1u << 1) | (1u << 2) | (1u << 3) | (1u << 5))
++#define M_COMMON_EN (0x7eu | (1u << 22) | (1u << 23) | (1u << 24) | (1u << 25) | (1u << 28) | (1u << 29))
++#define M_RX_WM_LAST ((1u << 26) | (1u << 27))
++
++static uint64_t se;
++
++static const char *i2c_error_name(uint32_t st) {
++    if (st & (1u << 10)) return "NACK";
++    if (st & (1u << 12)) return "bus protocol";
++    if (st & (1u << 13)) return "arbitration lost";
++    if (st & (1u << 1)) return "command overrun";
++    if (st & (1u << 2)) return "illegal command";
++    if (st & (1u << 5)) return "aborted";
++    return "failure";
++}
++
++// Waits for CMD_DONE or an error; on error or timeout aborts the command. Returns M_IRQ_STATUS (0 on timeout).
++static uint32_t i2c_wait(uint32_t want, uint8_t *rx) {
++    uint32_t st = 0;
++    for (unsigned us = 0; us < 50000; us += 10) {
++        st = SE_REG(0x610);
++        if (rx && (st & M_RX_WM_LAST) && (SE_REG(0x804) & 0x1ffffffu)) {
++            *rx = (uint8_t)SE_REG(0x780);
++            rx = 0;
++            SE_REG(0x618) = st & M_RX_WM_LAST;
++        }
++        if (st & (want | M_ERRORS)) break;
++        IODelay(10);
++    }
++    if (rx && (SE_REG(0x804) & 0x1ffffffu)) *rx = (uint8_t)SE_REG(0x780);   // data and CMD_DONE seen in the same poll
++    if (!(st & want) || (st & M_ERRORS)) {
++        SE_REG(0x604) = 1u << 1;   // M_GENI_CMD_ABORT
++        for (unsigned us = 0; us < 10000 && !(SE_REG(0x610) & (1u << 5)); us += 10) IODelay(10);
++        SE_REG(0x618) = 0xffffffffu;
++        return st ? st : 0;
++    }
++    SE_REG(0x618) = st;
++    return st;
++}
++
++// One register read: write the register number without STOP, then a repeated-start read of one byte.
++static int ktz_read(uint8_t reg, uint8_t *value) {
++    SE_REG(0x618) = 0xffffffffu;
++    SE_REG(0x26c) = 1;   // SE_I2C_TX_TRANS_LEN
++    SE_REG(0x600) = (I2C_OP_WRITE << 27) | (KTZ_ADDR << 9) | I2C_STOP_STRETCH;
++    SE_REG(0x700) = reg;
++    uint32_t st = i2c_wait(M_CMD_DONE, 0);
++    if (!(st & M_CMD_DONE) || (st & M_ERRORS)) {
++        printf("[blprobe] i2c write reg 0x%02x: %s (m_irq 0x%08x, geni_status 0x%08x)\n", reg,
++               st ? i2c_error_name(st) : "timeout", st, SE_REG(0x40));
++        return -1;
++    }
++    uint8_t byte = 0xff;
++    SE_REG(0x270) = 1;   // SE_I2C_RX_TRANS_LEN
++    SE_REG(0x600) = (I2C_OP_READ << 27) | (KTZ_ADDR << 9);
++    st = i2c_wait(M_CMD_DONE, &byte);
++    if (!(st & M_CMD_DONE) || (st & M_ERRORS)) {
++        printf("[blprobe] i2c read reg 0x%02x: %s (m_irq 0x%08x)\n", reg, st ? i2c_error_name(st) : "timeout", st);
++        return -1;
++    }
++    *value = byte;
++    return 0;
++}
++
++// One register write (register number, value) in a single 2-byte write with STOP.
++static int ktz_write(uint8_t reg, uint8_t value) {
++    SE_REG(0x618) = 0xffffffffu;
++    SE_REG(0x26c) = 2;
++    SE_REG(0x600) = (I2C_OP_WRITE << 27) | (KTZ_ADDR << 9);
++    SE_REG(0x700) = (uint32_t)reg | ((uint32_t)value << 8);
++    uint32_t st = i2c_wait(M_CMD_DONE, 0);
++    if (!(st & M_CMD_DONE) || (st & M_ERRORS)) {
++        printf("[blprobe] i2c write 0x%02x=0x%02x: %s (m_irq 0x%08x)\n", reg, value, st ? i2c_error_name(st) : "timeout", st);
++        return -1;
++    }
++    return 0;
++}
++
++// 11-bit level as mainline ktz8866_backlight_update_status: LSB register bits 2:0 first, then MSB register bits 10:3.
++static int ktz_set_level(unsigned level) {
++    if (level > 2047) level = 2047;
++    if (ktz_write(0x04, level & 7) || ktz_write(0x05, (level >> 3) & 0xff)) return -1;
++    uint8_t lsb = 0, msb = 0;
++    if (ktz_read(0x04, &lsb) || ktz_read(0x05, &msb)) return -1;
++    unsigned back = ((unsigned)msb << 3) | (lsb & 7);
++    printf("[blprobe] ktz8866 level set %u, read back %u %s\n", level, back, back == level ? "OK" : "MISMATCH");
++    return back == level ? 0 : -1;
++}
++
++static int ktz_open_locked(int log);
++
++static void i2c_step2(void) {
++    if (ktz_open_locked(1)) return;
++    static const struct { uint8_t reg; const char *name; } regs[] = {
++        {0x01, "DEVICE_ID"}, {0x02, "BL_CFG1"}, {0x03, "BL_CFG2"}, {0x04, "BL_BRT_LSB"}, {0x05, "BL_BRT_MSB"},
++        {0x08, "BL_EN"}, {0x0f, "FLAG"},
++    };
++    uint8_t v[7] = {0};
++    for (unsigned i = 0; i < 7; ++i) {
++        if (ktz_read(regs[i].reg, &v[i])) { native_backlight_probe_state = 4; return; }
++        printf("[blprobe] ktz8866 %s (0x%02x) = 0x%02x\n", regs[i].name, regs[i].reg, v[i]);
++    }
++    // 11-bit level: LSB register bits 2:0, MSB register = bits 10:3 (mainline ktz8866_backlight_update_status)
++    printf("[blprobe] ktz8866 level %u of 2047, BL_EN 0x%02x\n", ((unsigned)v[4] << 3) | (v[3] & 7), v[5]);
++    native_backlight_probe_state = 3;
++    if (probe_level < 3) return;
++    // step 3a (pipa-bl-probe=3): brightness registers only, 1009 -> 400 for 5 s -> the level the bootloader left
++    unsigned original = ((unsigned)v[4] << 3) | (v[3] & 7);
++    if (!original || ktz_set_level(400)) { native_backlight_probe_state = 4; return; }
++    IOSleep(5000);
++    if (ktz_set_level(original)) { native_backlight_probe_state = 4; return; }
++    native_backlight_probe_state = 5;
++}
++
++// Clock, source-clock, pin and engine checks, then the I2C set-up. Returns 0 when SE11 is ready for transfers.
++static int ktz_open_locked(int log) {
++    static int opened;
++    if (opened) return opened > 0 ? 0 : -1;
++    opened = -1;
++    static const struct { uint32_t offset, vote_bit; } clk[] = {{0x1839c, 25}, {0x18004, 20}, {0x18008, 21}, {0x23138, 19}, {0x23140, 18}};
++    uint32_t vote = rd(GCC_BASE + 0x52008);
++    for (unsigned i = 0; i < 5; ++i) {
++        uint32_t cbcr = rd(GCC_BASE + clk[i].offset);
++        if (vote == 0xdeadbeefu || cbcr == 0xdeadbeefu || !((vote >> clk[i].vote_bit) & 1) || (((cbcr >> 31) & 1) && !((cbcr >> 1) & 1))) {
++            printf("[blprobe] SE11 clock 0x%x not usable (cbcr 0x%08x vote 0x%08x)\n", clk[i].offset, cbcr, vote);
++            return -1;
++        }
++    }
++    uint32_t rcg_cmd = rd(GCC_BASE + 0x183a0), rcg_cfg = rd(GCC_BASE + 0x183a4);
++    uint32_t src = (rcg_cfg >> 8) & 7, div = rcg_cfg & 0x1f, mode = (rcg_cfg >> 12) & 3;
++    if (log) printf("[blprobe] s3 rcg cmd 0x%08x cfg 0x%08x (src %u div %u mode %u)\n", rcg_cmd, rcg_cfg, src, div, mode);
++    if ((rcg_cmd >> 31) & 1 || src != 0 || div > 1 || mode != 0) {
++        printf("[blprobe] step 2 skipped: SE11 source clock is not the 19.2 MHz XO\n");
++        return -1;
++    }
++    static const struct { const char *name; uint64_t base; unsigned gpio; } pins[] = {
++        {"HWEN", 0x0f100000ull, 139}, {"ENP", TLMM_SOUTH, 130}, {"ENN", TLMM_SOUTH, 131},
++    };
++    for (unsigned i = 0; log && i < 3; ++i) {
++        uint32_t ctl = rd(pins[i].base + 0x1000ull * pins[i].gpio), io = rd(pins[i].base + 0x1000ull * pins[i].gpio + 4);
++        printf("[blprobe] %s gpio%u ctl 0x%08x (func %u, oe %u) in %u out %u\n", pins[i].name, pins[i].gpio, ctl,
++               (ctl >> 2) & 0xf, (ctl >> 9) & 1, io & 1, (io >> 1) & 1);
++    }
++    se = ml_io_map(SE11_BASE, 0x1000);
++    if (!se) return -1;
++    if (SE_REG(0x40) & 1u) {
++        printf("[blprobe] step 2 skipped: SE11 primary sequencer busy (status 0x%08x)\n", SE_REG(0x40));
++        return -1;
++    }
++    uint32_t depth = (SE_REG(0xe24) >> 16) & 0x3f;
++    SE_REG(0x28) |= 0x7fu;
++    SE_REG(0xe30) |= 0xfu;
++    SE_REG(0x24) = 0x7fu;
++    SE_REG(0x20) = 1u;
++    SE_REG(0x618) = 0xffffffffu;
++    SE_REG(0x810) = depth - 1;
++    SE_REG(0x814) = depth;
++    if (log) printf("[blprobe] se11 before: SE_IRQ_EN 0x%08x M_IRQ_EN 0x%08x CGC 0x%08x\n", SE_REG(0xe1c), SE_REG(0x614), SE_REG(0x28));
++    SE_REG(0x614) |= M_COMMON_EN | M_CMD_DONE | M_RX_WM_LAST;
++    SE_REG(0x258) = 0;
++    SE_REG(0x80c) = 0;   // no TX watermark: the single byte is written right after the command
++    SE_REG(0x260) = 0x7f8feu; SE_REG(0x264) = 0xffefeu; SE_REG(0x284) = 0x7f8feu; SE_REG(0x288) = 0xffefeu;
++    SE_REG(0x254) = 0;
++    SE_REG(0x7c) = 0;
++    SE_REG(0x48) = (7u << 4) | 1u;
++    SE_REG(0x278) = (10u << 20) | (11u << 10) | 26u;
++    __asm__ volatile("dsb sy" ::: "memory");
++    if (log) printf("[blprobe] se11 i2c ready: fifo depth %u, m_clk 0x%08x, scl 0x%08x, m_irq_en 0x%08x\n", depth, SE_REG(0x48),
++           SE_REG(0x278), SE_REG(0x614));
++    opened = 1;
++    return 0;
++}
++
++// For the AppleARMBacklight service (PipaBacklight.cpp). Callers serialise; each returns 0 on success.
++int pipa_ktz_open(unsigned *level) {
++    if (ktz_open_locked(0)) return -1;
++    uint8_t lsb = 0, msb = 0;
++    if (ktz_read(0x04, &lsb) || ktz_read(0x05, &msb)) return -1;
++    if (level) *level = ((unsigned)msb << 3) | (lsb & 7);
++    return 0;
++}
++
++int pipa_ktz_read_level(unsigned *level) {
++    uint8_t lsb = 0, msb = 0;
++    if (ktz_read(0x04, &lsb) || ktz_read(0x05, &msb)) return -1;
++    *level = ((unsigned)msb << 3) | (lsb & 7);
++    return 0;
++}
++
++int pipa_ktz_write_level(unsigned level) {
++    if (level > 2047) level = 2047;
++    return ktz_write(0x04, level & 7) || ktz_write(0x05, (level >> 3) & 0xff) ? -1 : 0;
++}
++
++static void probe_thread(void *arg, int wait) {
++    (void)arg; (void)wait;
++    IOSleep(20000);
++    static const struct { const char *name; uint32_t offset, vote_bit; } clocks[] = {
++        {"wrap1_s3", 0x1839c, 25}, {"wrap1_m_ahb", 0x18004, 20}, {"wrap1_s_ahb", 0x18008, 21}, {"wrap1_core", 0x23138, 19},
++        {"wrap1_core_2x", 0x23140, 18},
++    };
++    // A branch whose CBCR has HW_CTL (bit 1) set is in hardware clock gating: the hardware ungates it on each bus access and
++    // CLK_OFF (bit 31) only says it is idle at this moment. Linux (clk-branch.c, branch_in_hwcg_mode) skips the halt check
++    // for such branches; it is usable when its vote is set. Test 24v: wrap1_s_ahb read 0x80000002 with vote bit 21 set.
++    uint32_t vote = rd(GCC_BASE + 0x52008);
++    printf("[blprobe] gcc vote 0x52008 = 0x%08x\n", vote);
++    int all_on = vote != 0xdeadbeefu;
++    for (unsigned i = 0; i < sizeof clocks / sizeof clocks[0]; ++i) {
++        uint32_t cbcr = rd(GCC_BASE + clocks[i].offset);
++        int voted = (vote >> clocks[i].vote_bit) & 1, hwcg = (cbcr >> 1) & 1, off = (cbcr >> 31) & 1;
++        int usable = cbcr != 0xdeadbeefu && voted && (!off || hwcg);
++        if (!usable) all_on = 0;
++        printf("[blprobe] gcc %s cbcr 0x%08x vote %d hwcg %d %s\n", clocks[i].name, cbcr, voted, hwcg,
++               !usable ? "OFF" : off ? "gated-idle" : "on");
++    }
++    for (unsigned gpio = 60; gpio <= 61; ++gpio) {
++        uint32_t ctl = rd(TLMM_SOUTH + 0x1000ull * gpio), io = rd(TLMM_SOUTH + 0x1000ull * gpio + 4);
++        printf("[blprobe] gpio%u ctl 0x%08x (func %u) io 0x%08x\n", gpio, ctl, (ctl >> 2) & 0xf, io);
++    }
++    if (!all_on) {
++        native_backlight_probe_state = 1;
++        printf("[blprobe] SE11 not read: a clock is off\n");
++        return;
++    }
++    static const struct { const char *name; uint32_t offset; } se[] = {
++        {"FW_REVISION_RO", 0x68}, {"IF_DISABLE_RO", 0x64}, {"GENI_STATUS", 0x40}, {"SER_M_CLK_CFG", 0x48}, {"CLK_SEL", 0x7c},
++        {"DMA_MODE_EN", 0x258}, {"I2C_SCL_COUNTERS", 0x278}, {"M_IRQ_STATUS", 0x610}, {"TX_FIFO_STATUS", 0x800},
++        {"RX_FIFO_STATUS", 0x804}, {"HW_PARAM_0", 0xe24},
++    };
++    for (unsigned i = 0; i < sizeof se / sizeof se[0]; ++i) {
++        uint32_t v = rd(SE11_BASE + se[i].offset);
++        if (se[i].offset == 0x68) printf("[blprobe] se11 %s 0x%08x (protocol %u, 3 = I2C)\n", se[i].name, v, (v >> 8) & 0xff);
++        else printf("[blprobe] se11 %s 0x%08x\n", se[i].name, v);
++    }
++    native_backlight_probe_state = 2;
++    if (probe_level >= 2) i2c_step2();
++}
++
++void native_backlight_probe(void) {
++    static int started;
++    unsigned on = 0;
++    if (started || !PE_parse_boot_argn("pipa-bl-probe", &on, sizeof on) || on < 1 || on > 3) return;
++    probe_level = on;
++    started = 1;
++    void *thread = 0;
++    if (kernel_thread_start(probe_thread, 0, &thread) == 0) thread_deallocate(thread);
++}
+diff --git a/package/LegacyDisplayProbe.cpp b/package/LegacyDisplayProbe.cpp
+index af9fbd9..0651a0a 100644
+--- a/package/LegacyDisplayProbe.cpp
++++ b/package/LegacyDisplayProbe.cpp
+@@ -554,6 +554,7 @@ extern void native_keystore_probe(void);
+ extern "C" void native_usb_debug_probe(void);
+ extern void native_touch_probe(void);
+ extern void native_buttons_probe(void);
++extern "C" void native_backlight_probe(void);
+ extern void native_gestures_probe(void);
+ extern void native_battery_probe(void);
+ extern void native_gpu_probe(void);
+@@ -582,6 +583,7 @@ void native_legacy_display_late_probe(void) {
+     if (sheng_wifi_probe) sheng_wifi_probe();
+     if (sheng_bluetooth_probe) sheng_bluetooth_probe();
+     native_buttons_probe();
++    native_backlight_probe();
+     native_gestures_probe();
+     native_battery_probe();
+     if (sheng_backlight_probe) sheng_backlight_probe();
+diff --git a/package/PipaBacklightAttach.cpp b/package/PipaBacklightAttach.cpp
+new file mode 100644
+index 0000000..d1f6944
+--- /dev/null
++++ b/package/PipaBacklightAttach.cpp
+@@ -0,0 +1,102 @@
++// SPDX-License-Identifier: BSD-2-Clause-Patent
++// Late registration of the pipa AppleARMBacklight service (PipaBacklightService.cpp). Adapted from this repository's
++// TB-J716F BacklightProbe.cpp (removed in 421c34b). Off by default on pipa: sheng-backlight=1 enables it.
++// The service runs the class initializer between preModLoad/postModLoad of AppleARMPlatform and, with backlight-control
++// (sheng-backlight-control, default 1), answers getMetaClass() with Apple's AppleARMBacklight metaclass so that a match on
++// that class name finds it. The vtable slot and length are checked against the built object by scripts/check-pipa-backlight-vtable.py.
++
++#include <IOKit/IOService.h>
++#include <IOKit/IOPlatformExpert.h>
++#include <IOKit/IOLib.h>
++#include <libkern/OSBase.h>
++#include <pexpert/pexpert.h>
++#include <stdint.h>
++
++extern "C" void sheng_backlight_static_init(void) __asm__("__GLOBAL__sub_I_PipaBacklightService.cpp");
++extern "C" void *shengxnu_backlight_create_instance(void);
++extern "C" const void *_ZTV14ShengBacklight[];
++extern "C" {
++volatile int sheng_backlight_probe_result = 0;
++volatile int sheng_backlight_probe_stage = 0;
++}
++
++namespace {
++
++static const OSMetaClass *gAppleBacklightMeta;
++constexpr size_t kShengBacklightVtableEntries = 171;
++static const void *gPatchedBacklightVtable[256];
++
++static const OSMetaClass *appleBacklightGetMetaClass(const OSObject *) {
++    return gAppleBacklightMeta;
++}
++
++static bool patchBacklightVtable(IOService *service) {
++    gAppleBacklightMeta = OSMetaClass::getMetaClassWithName(
++        OSSymbol::withCStringNoCopy("AppleARMBacklight"));
++    if (!gAppleBacklightMeta) return false;
++    // 171 = 2 header words + 169 virtual slots of ShengBacklight as built against this iPadOS 17 XNU (measured on the object by
++    // scripts/check-pipa-backlight-vtable.py). The TB-J716F code copied 189, which ran 18 words into the next vtable; the
++    // slots past the real end stay null here.
++    for (size_t i = 0; i < kShengBacklightVtableEntries; ++i) {
++        gPatchedBacklightVtable[i] = _ZTV14ShengBacklight[i];
++    }
++    gPatchedBacklightVtable[2 + 7] = reinterpret_cast<const void *>(&appleBacklightGetMetaClass);
++    *reinterpret_cast<const void ***>(service) = &gPatchedBacklightVtable[2];
++    return true;
++}
++
++} // namespace
++
++extern "C" void sheng_backlight_probe(void) {
++    static bool started = false;
++    if (started) return;
++    uint32_t enabled = 0;
++    PE_parse_boot_argn("sheng-backlight", &enabled, sizeof(enabled));
++    if (!enabled) return;
++    started = true;
++    sheng_backlight_probe_stage = 1;
++
++    void *handle = OSMetaClass::preModLoad("com.apple.driver.AppleARMPlatform");
++    if (!handle) {
++        sheng_backlight_probe_result = -1;
++        return;
++    }
++    sheng_backlight_static_init();
++    if (OSMetaClass::postModLoad(handle) != kIOReturnSuccess) {
++        sheng_backlight_probe_result = -2;
++        return;
++    }
++    sheng_backlight_probe_stage = 2;
++
++    IOService *platform = IOService::getPlatform();
++    if (!platform) {
++        sheng_backlight_probe_result = -3;
++        return;
++    }
++    IOService *service = static_cast<IOService *>(shengxnu_backlight_create_instance());
++    if (!service) {
++        sheng_backlight_probe_result = -4;
++        return;
++    }
++    uint32_t control = 1;
++    PE_parse_boot_argn("sheng-backlight-control", &control, sizeof(control));
++    if (control && !patchBacklightVtable(service)) {
++        service->release();
++        sheng_backlight_probe_result = -6;
++        return;
++    }
++    if (!service->attach(platform)) {
++        service->release();
++        sheng_backlight_probe_result = -5;
++        return;
++    }
++    sheng_backlight_probe_stage = 3;
++    if (!service->start(platform)) {
++        service->detach(platform);
++        service->release();
++        sheng_backlight_probe_result = -6;
++        return;
++    }
++    sheng_backlight_probe_stage = 4;
++    sheng_backlight_probe_result = 1;
++}
+diff --git a/package/PipaBacklightService.cpp b/package/PipaBacklightService.cpp
+new file mode 100644
+index 0000000..0ae8114
+--- /dev/null
++++ b/package/PipaBacklightService.cpp
+@@ -0,0 +1,343 @@
++// SPDX-License-Identifier: BSD-2-Clause-Patent
++// AppleARMBacklight brightness service for the Xiaomi Pad 6 (pipa): publishes the interface CoreBrightness in backboardd
++// uses (IODisplayParameters brightness / BrightnessMilliNits / FadePeriod, backlight-control) and drives the panel's KTZ8866
++// backlight controller over I2C11 (BacklightProbe.c: pipa_ktz_open / pipa_ktz_write_level, verified on this unit in tests
++// 26v/27v). Adapted from this repository's TB-J716F AppleARMBacklight.cpp (removed in 421c34b), which scaled AMOLED pixels;
++// the pipa panel is an LCD, so pixels stay at full scale (native_backlight_scale, defined below, is 256) and only the LED current
++// changes. Level range 0..2047 = the KTZ8866's 11-bit BL_BRT. Off unless sheng-backlight=1.
++#include <IOKit/IOService.h>
++#include <IOKit/IOLib.h>
++#include <kern/thread.h>
++#include <libkern/c++/OSNumber.h>
++#include <libkern/c++/OSBoolean.h>
++#include <libkern/c++/OSString.h>
++#include <libkern/c++/OSData.h>
++#include <libkern/c++/OSDictionary.h>
++#include <pexpert/pexpert.h>
++#include <stdint.h>
++#include <string.h>
++
++extern "C" {
++// [0] stage (1 init, 4 ready)
++// [1] current level (0..2047)
++// [2] target level (0..2047)
++// [3] brightness updates applied
++// [4] errors (0)
++// [5] setProperties calls from CoreBrightness (backboardd)
++// [6] last FadePeriod (ms)
++// [7] last level written to the KTZ8866
++volatile uint32_t native_backlight_stats[8];
++// The GOP presenter multiplies every pixel by native_backlight_scale/256 (NativeGOPPresenter.cpp). That scaling was the
++// TB-J716F AMOLED's brightness; on pipa's LCD brightness is the KTZ8866 LED current above, so the pixel factor is unity.
++volatile uint32_t native_backlight_scale = 256;
++int pipa_ktz_open(unsigned *level);
++int pipa_ktz_write_level(unsigned level);
++int pipa_ktz_read_level(unsigned *level);
++}
++
++namespace {
++
++constexpr uint32_t kMaxLevel = 2047;
++constexpr uint32_t kInitialLevel = 1009;   // replaced in start() by the level the bootloader left (read from the KTZ8866)
++constexpr uint32_t kMaxFadeMs = 2000;
++constexpr uint32_t kStepMs = 16;
++// Millinits range for iPadOS CoreBrightness: 2 nits min, 500 nits max
++constexpr int32_t kMinMilliNits = 2000;
++constexpr int32_t kMaxMilliNits = 500000;
++constexpr uint32_t kLmaxProduct = 500u << 16;   // 16.16 fixed-point nits
++constexpr uint32_t kLmidProduct = 140;
++constexpr uint32_t kLminProduct = 2;
++
++
++static bool extractU32(const OSObject *obj, uint32_t *out) {
++    if (!obj) return false;
++    if (const OSNumber *num = OSDynamicCast(OSNumber, obj)) {
++        *out = num->unsigned32BitValue();
++        return true;
++    }
++    if (const OSDictionary *dict = OSDynamicCast(OSDictionary, obj)) {
++        if (const OSNumber *val = OSDynamicCast(OSNumber, dict->getObject("value"))) {
++            *out = val->unsigned32BitValue();
++            return true;
++        }
++    }
++    return false;
++}
++
++static uint32_t nitsFixedToLevel(uint32_t fixed) {
++    int32_t nits = static_cast<int32_t>(fixed);
++    if (nits <= 0) return 0;
++    int64_t milli = (static_cast<int64_t>(nits) * 1000) >> 16;
++    if (milli <= kMinMilliNits) return 1;
++    if (milli >= kMaxMilliNits) return kMaxLevel;
++    return static_cast<uint32_t>(1 + (milli - kMinMilliNits) * (kMaxLevel - 1) / (kMaxMilliNits - kMinMilliNits));
++}
++
++static OSDictionary *makeRangeDict(int64_t minVal, int64_t maxVal, int64_t curVal) {
++    OSDictionary *dict = OSDictionary::withCapacity(3);
++    if (!dict) return nullptr;
++    OSNumber *nMin = OSNumber::withNumber(static_cast<uint64_t>(minVal), 64);
++    OSNumber *nMax = OSNumber::withNumber(static_cast<uint64_t>(maxVal), 64);
++    OSNumber *nVal = OSNumber::withNumber(static_cast<uint64_t>(curVal), 64);
++    if (nMin) { dict->setObject("min", nMin); nMin->release(); }
++    if (nMax) { dict->setObject("max", nMax); nMax->release(); }
++    if (nVal) { dict->setObject("value", nVal); nVal->release(); }
++    return dict;
++}
++
++} // namespace
++
++class ShengBacklight : public IOService {
++    OSDeclareDefaultStructors(ShengBacklight)
++
++private:
++    IOLock *fLock;
++    uint32_t fCurrent;
++    uint32_t fTarget;
++    uint32_t fSavedNonZero;
++    uint32_t fFadeStart;
++    uint32_t fFadeSteps;
++    uint32_t fFadeStep;
++    bool fEnabled;
++    bool fStopping;
++    uint32_t fWritten;
++
++    // Called with fLock held (or before the fade thread exists): the I2C transfers are serialised by it.
++    void applyLevel(uint32_t level) {
++        if (level > kMaxLevel) level = kMaxLevel;
++        if (level == fWritten) { fCurrent = level; native_backlight_stats[1] = level; return; }
++        if (pipa_ktz_write_level(level)) {
++            native_backlight_stats[4] = native_backlight_stats[4] + 1;
++            return;   // fCurrent unchanged: the fade loop retries on its next step
++        }
++        fWritten = level;
++        fCurrent = level;
++        if (level == fTarget) {
++            unsigned back = 0xffffffffu;
++            int rc = pipa_ktz_read_level(&back);
++            IOLog("[backlight] target %u written to KTZ8866 (writes %u), read back %u%s\n", level,
++                  native_backlight_stats[3] + 1, back, rc ? " (read failed)" : back == level ? " OK" : " MISMATCH");
++        }
++        native_backlight_stats[1] = level;
++        native_backlight_stats[7] = level;
++        native_backlight_stats[3] = native_backlight_stats[3] + 1;
++    }
++
++    void publishDisplayParameters(uint32_t level) {
++        OSDictionary *params = OSDictionary::withCapacity(3);
++        if (!params) return;
++        if (OSDictionary *br = makeRangeDict(0, kMaxLevel, level)) {
++            params->setObject("brightness", br);
++            br->release();
++        }
++        int64_t milli = level ? kMinMilliNits + static_cast<int64_t>(level) * (kMaxMilliNits - kMinMilliNits) / kMaxLevel : 0;
++        if (OSDictionary *nits = makeRangeDict(kMinMilliNits, kMaxMilliNits, milli)) {
++            params->setObject("BrightnessMilliNits", nits);
++            nits->release();
++        }
++        if (OSDictionary *fade = makeRangeDict(0, kMaxFadeMs, 0)) {
++            params->setObject("FadePeriod", fade);
++            fade->release();
++        }
++        setProperty("IODisplayParameters", params);
++        params->release();
++    }
++
++    static void fadeThreadMain(void *arg, wait_result_t) {
++        static_cast<ShengBacklight *>(arg)->fadeLoop();
++    }
++
++    void fadeLoop() {
++        for (;;) {
++            IOSleep(kStepMs);
++            if (!fLock) break;
++            IOLockLock(fLock);
++            if (fStopping) {
++                IOLockUnlock(fLock);
++                break;
++            }
++            if (fCurrent != fTarget) {
++                uint32_t next = fTarget;
++                if (fFadeSteps > 1 && fFadeStep + 1 < fFadeSteps) {
++                    ++fFadeStep;
++                    int32_t start = static_cast<int32_t>(fFadeStart);
++                    int32_t delta = static_cast<int32_t>(fTarget) - start;
++                    next = static_cast<uint32_t>(start + delta * static_cast<int32_t>(fFadeStep) / static_cast<int32_t>(fFadeSteps));
++                }
++                applyLevel(next);
++            }
++            IOLockUnlock(fLock);
++        }
++    }
++
++public:
++    bool init(OSDictionary *dict = nullptr) override {
++        if (!IOService::init(dict)) return false;
++        fLock = IOLockAlloc();
++        fCurrent = kInitialLevel;
++        fTarget = kInitialLevel;
++        fSavedNonZero = kInitialLevel;
++        fFadeStart = kInitialLevel;
++        fFadeSteps = 0;
++        fFadeStep = 0;
++        fEnabled = true;
++        fStopping = false;
++        fWritten = 0xffffffffu;
++        return fLock != nullptr;
++    }
++
++    void free() override {
++        if (fLock) {
++            IOLockFree(fLock);
++            fLock = nullptr;
++        }
++        IOService::free();
++    }
++
++    bool start(IOService *provider) override {
++        unsigned bootLevel = 0;
++        if (pipa_ktz_open(&bootLevel)) {
++            native_backlight_stats[4] = native_backlight_stats[4] + 1;
++            IOLog("[backlight] KTZ8866 not reachable; service not started\n");
++            return false;
++        }
++        if (!IOService::start(provider)) return false;
++        native_backlight_stats[0] = 1;
++        if (bootLevel > kMaxLevel) bootLevel = kMaxLevel;
++        fWritten = bootLevel;
++        fCurrent = fTarget = fFadeStart = bootLevel;
++        fSavedNonZero = bootLevel ? bootLevel : kInitialLevel;
++
++        setName("backlight");
++        setProperty("IONameMatch", "backlight");
++        setProperty("IONameMatched", "backlight");
++        // Grant backboardd (CoreBrightness) permission to call IORegistryEntrySetCFProperties on this service.
++        setProperty("NativeSandboxGrantProcess", "backboardd");
++
++        uint32_t control = 1;
++        PE_parse_boot_argn("sheng-backlight-control", &control, sizeof(control));
++        if (control) {
++            setProperty("backlight-control", kOSBooleanTrue);
++        }
++
++        const uint8_t zeroTable[32] = {};
++        if (OSData *data = OSData::withBytes(zeroTable, sizeof(zeroTable))) {
++            setProperty("backlight-marketing-table", data);
++            setProperty("backlight-calibration-parameters", data);
++            data->release();
++        }
++        const uint32_t lmax = kLmaxProduct;
++        if (OSData *data = OSData::withBytes(&lmax, sizeof(lmax))) {
++            setProperty("LmaxProduct", data);
++            data->release();
++        }
++        setProperty("LmidProduct", kLmidProduct, 32);
++        setProperty("LminProduct", kLminProduct, 32);
++
++        native_backlight_stats[1] = fCurrent;
++        native_backlight_stats[2] = fCurrent;
++        native_backlight_stats[7] = fCurrent;
++        publishDisplayParameters(fCurrent);
++
++        thread_t thread = THREAD_NULL;
++        if (kernel_thread_start(&ShengBacklight::fadeThreadMain, this, &thread) == KERN_SUCCESS) {
++            thread_deallocate(thread);
++        }
++
++        native_backlight_stats[0] = 4;
++        registerService();
++        IOLog("[backlight] AppleARMBacklight registered on the KTZ8866 (level=%u/%u)\n", fCurrent, kMaxLevel);
++        return true;
++    }
++
++    void stop(IOService *provider) override {
++        if (fLock) {
++            IOLockLock(fLock);
++            fStopping = true;
++            IOLockUnlock(fLock);
++        }
++        IOService::stop(provider);
++    }
++
++    IOReturn setProperties(OSObject *properties) override {
++        OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
++        if (!dict) return kIOReturnBadArgument;
++
++        const OSDictionary *params = OSDynamicCast(OSDictionary, dict->getObject("IODisplayParameters"));
++        const OSDictionary *source = params ? params : dict;
++
++        uint32_t fadeMs = 0;
++        extractU32(source->getObject("FadePeriod"), &fadeMs);
++        if (fadeMs > kMaxFadeMs) fadeMs = kMaxFadeMs;
++
++        uint32_t newLevel = 0;
++        bool hasLevel = false;
++        if (extractU32(source->getObject("brightness"), &newLevel)) {
++            if (newLevel > kMaxLevel) newLevel = kMaxLevel;
++            hasLevel = true;
++        } else {
++            uint32_t fixedNits = 0;
++            if (extractU32(source->getObject("brightness-nits"), &fixedNits) ||
++                extractU32(source->getObject("BrightnessMilliNits"), &fixedNits)) {
++                newLevel = nitsFixedToLevel(fixedNits);
++                hasLevel = true;
++            }
++        }
++
++        if (const OSBoolean *en = OSDynamicCast(OSBoolean, source->getObject("backlight-enable"))) {
++            fEnabled = en->isTrue();
++            if (!fEnabled) {
++                newLevel = 0;
++                hasLevel = true;
++            } else if (!hasLevel) {
++                newLevel = fSavedNonZero ? fSavedNonZero : kInitialLevel;
++                hasLevel = true;
++            }
++        }
++
++        if (!hasLevel) {
++            IOLog("[backlight] setProperties #%u from CoreBrightness without a level (fade %u ms)\n",
++                  native_backlight_stats[5] + 1, fadeMs);
++            native_backlight_stats[5] = native_backlight_stats[5] + 1;
++            return kIOReturnSuccess;
++        }
++        IOLog("[backlight] setProperties #%u: requested level %u (fade %u ms, current %u)\n", native_backlight_stats[5] + 1,
++              newLevel, fadeMs, fCurrent);
++
++        native_backlight_stats[5] = native_backlight_stats[5] + 1;
++        native_backlight_stats[6] = fadeMs;
++
++        IOLockLock(fLock);
++        if (newLevel > 0) {
++            fSavedNonZero = newLevel;
++        }
++        fTarget = newLevel;
++        native_backlight_stats[2] = newLevel;
++        uint32_t steps = fadeMs / kStepMs;
++        if (steps <= 1 || newLevel == fCurrent) {
++            fFadeSteps = 0;
++            fFadeStep = 0;
++            applyLevel(newLevel);
++        } else {
++            fFadeStart = fCurrent;
++            fFadeSteps = steps;
++            fFadeStep = 0;
++        }
++        IOLockUnlock(fLock);
++
++        publishDisplayParameters(newLevel);
++        return kIOReturnSuccess;
++    }
++};
++
++OSDefineMetaClassAndStructors(ShengBacklight, IOService)
++
++extern "C" void *shengxnu_backlight_create_instance(void) {
++    ShengBacklight *instance = new ShengBacklight;
++    if (!instance) return nullptr;
++    if (!instance->init()) {
++        instance->release();
++        return nullptr;
++    }
++    return instance;
++}
+diff --git a/scripts/build-gop-legacy-display.py b/scripts/build-gop-legacy-display.py
+index 8e93ab5..3e9b92a 100644
+--- a/scripts/build-gop-legacy-display.py
++++ b/scripts/build-gop-legacy-display.py
+@@ -82,7 +82,7 @@ struct OriginalLegacySwapRequest;
+ struct OriginalLegacyStateRequest {uint32_t skipRequested,requested,skipPowered,powered;uint8_t changed;uint8_t pad[11];};
+ static constexpr unsigned kLegacyVsyncClients=5592;
+ static constexpr unsigned kRequestRect0=17,kRequestRect1=81,kRequestMasks=792,kRequestOptions=804,kRequestDims=816,kRequestSurfaces=2624;
+-#define NATIVE_LEGACY_LEAVES(LEAF) LEAF(211) LEAF(245) LEAF(246) LEAF(306) LEAF(307) LEAF(338) LEAF(345)
++#define NATIVE_LEGACY_LEAVES(LEAF) LEAF(211) LEAF(245) LEAF(246) LEAF(306) LEAF(307) LEAF(338)
+ class IOMobileFramebufferLegacy : public IOService {
+  OSDeclareAbstractStructors(IOMobileFramebufferLegacy)
+  unsigned char originalPrivate[0x18a0-sizeof(IOService)];
+@@ -147,6 +147,10 @@ for i in range(168, 358):
+         header += ' virtual bool startHardware();\n'
+     elif i == 354:
+         header += ' virtual int applyStateRequest(OriginalLegacyStateRequest *,bool);\n'
++    elif i == 345:
++        # The subclass's swap-cancel hook: the family's swap_wait_gated calls it, with only this, after 5 s without a swap
++        # completion ("cancelling swaps"), ignores its result, and then runs its own slots 346/241/218 to release the queue.
++        header += ' virtual void cancelSwapsHook()=0;\n'
+     elif i in pure:
+         header += f' virtual __attribute__((noreturn)) void opaque{i}()=0;\n'
+     else:
+@@ -286,6 +290,7 @@ for extra_name in (
+     'QcomDwc3.cpp', 'UsbProbe.cpp',
+     'GpuPowerBoard.h', 'A650Gmu.h', 'A650Gmu.c', 'GpuProbe.cpp', 'MdssProbe.cpp',
+     'NativeBatteryBoard.h', 'NativeBattery.cpp',
++    'PipaBacklightService.cpp', 'PipaBacklightAttach.cpp',
+     'BootResetCore.h', 'FatVolume.h', 'FatVolume.c', 'MhiBoot.h', 'MhiBoot.c',
+     'WcnPower.h', 'WifiPcieTables.h', 'WifiFirmware.h', 'WifiFirmware.c', 'WifiProbe.cpp', 'WifiNet.cpp',
+     'BluetoothFirmware.h', 'BluetoothFirmware.c', 'BluetoothProbe.cpp',
+@@ -405,8 +410,19 @@ run([str(battery_source) if str(arg) == str(source) else str(battery_obj) if str
+ run(['llvm-objcopy', '--remove-section=__DATA,__mod_init_func', battery_obj, battery_late])
+ require(macho_globalize_symbol(battery_late, '__GLOBAL__sub_I_NativeBattery.cpp'), 'Globalized NativeBattery initializer')
+ 
+-# The KTZ8866 backlight controller of the Xiaomi Pad 6 is not ported yet, so the TB-J716F RM692E6 backlight sources
+-# (AppleARMBacklight.cpp, BacklightProbe.cpp) are neither copied nor compiled and sheng-backlight stays unset.
++# The pipa AppleARMBacklight service on the KTZ8866 (PipaBacklightService.cpp, off unless sheng-backlight=1) and its late
++# attach (PipaBacklightAttach.cpp), compiled as the TB-J716F pair was before 421c34b: the class initializer is taken out of
++# __mod_init_func and run by the attach between preModLoad/postModLoad.
++backlight_attach_source = kit_dir / 'PipaBacklightAttach.cpp'
++backlight_attach_obj = OUT / 'PipaBacklightAttach.o'
++run([str(backlight_attach_source) if str(arg) == str(source) else str(backlight_attach_obj) if str(arg) == str(OUT / 'LegacyDisplayProbe.o') else arg for arg in cmd] + ['-I', str(kit_dir)], cwd=r['directory'])
++backlight_class_source = kit_dir / 'PipaBacklightService.cpp'
++backlight_class_obj = OUT / 'PipaBacklightService.o'
++backlight_class_late = OUT / 'PipaBacklightService.late.o'
++run([str(backlight_class_source) if str(arg) == str(source) else str(backlight_class_obj) if str(arg) == str(OUT / 'LegacyDisplayProbe.o') else arg for arg in cmd] + ['-I', str(kit_dir)], cwd=r['directory'])
++run(['llvm-objcopy', '--remove-section=__DATA,__mod_init_func', backlight_class_obj, backlight_class_late])
++require(macho_globalize_symbol(backlight_class_late, '__GLOBAL__sub_I_PipaBacklightService.cpp'), 'Globalized PipaBacklightService initializer')
++run(['python3', str(ROOT / 'scripts/check-pipa-backlight-vtable.py'), str(backlight_class_late), '171'])
+ 
+ nativewifi = Path(os.environ.get('ATH12K_WIFI_DIR') or os.environ.get('NATIVE_WIFI_DIR') or (unixnu_repo / 'drivers/Ath12kWifi'))
+ require((nativewifi / 'include/nw_abi.h').exists(), f'Missing Ath12kWifi module directory at {nativewifi}')
+@@ -529,6 +545,10 @@ mhi_source = kit_dir / 'MhiBoot.c'
+ mhi_obj = OUT / 'MhiBoot.o'
+ compile_c_obj(mhi_source, mhi_obj)
+ 
++backlight_source = kit_dir / 'BacklightProbe.c'
++backlight_obj = OUT / 'BacklightProbe.o'
++compile_c_obj(backlight_source, backlight_obj)
++
+ geni_uart_source = sm8250_platform / 'Sm8250GeniUart.c'
+ geni_uart_obj = OUT / 'Sm8250GeniUart.o'
+ run([str(geni_uart_source) if str(arg) == str(buttons_source) else str(geni_uart_obj) if str(arg) == str(buttons_obj) else arg for arg in c_out] + ['-Wall', '-Wextra', '-Werror', '-I', str(sm8250_platform)], cwd=c_record['directory'])
+@@ -623,6 +643,8 @@ run([
+     gpu_obj,
+     mdss_obj,
+     battery_late,
++    backlight_attach_obj,
++    backlight_class_late,
+     wifi_obj,
+     wifinet_late,
+     wifi_fw_obj,
+@@ -634,6 +656,7 @@ run([
+     touch_fw_obj,
+     fat_obj,
+     mhi_obj,
++    backlight_obj,
+     rpmh_obj,
+     buttons_obj,
+     gmu_fw_obj,
+@@ -677,6 +700,8 @@ sources = [
+     kit_dir / 'A650Gmu.h',
+     mdss_source,
+     battery_source,
++    backlight_attach_source,
++    backlight_class_source,
+     kit_dir / 'NativeBatteryBoard.h',
+     buttons_source,
+     buttons_source.parent / 'ButtonsCore.h',
+diff --git a/scripts/check-pipa-backlight-vtable.py b/scripts/check-pipa-backlight-vtable.py
+new file mode 100755
+index 0000000..fa110ca
+--- /dev/null
++++ b/scripts/check-pipa-backlight-vtable.py
+@@ -0,0 +1,29 @@
++#!/usr/bin/env python3
++"""Check the assumptions PipaBacklightAttach.cpp makes about ShengBacklight's vtable in the built object:
++entry 2 + 7 is ShengBacklight::getMetaClass() and the vtable length equals kShengBacklightVtableEntries.
++Usage: check-pipa-backlight-vtable.py PipaBacklightService.late.o [expected-entries]"""
++import re, subprocess, sys
++
++obj = sys.argv[1]
++syms = subprocess.run(['llvm-nm', '-n', '--defined-only', obj], capture_output=True, text=True, check=True).stdout.split('\n')
++rows = [(int(a, 16), t, n) for a, t, n in (l.split(None, 2) for l in syms if len(l.split(None, 2)) == 3)]
++vt = next(r for r in rows if r[2] == '__ZTV14ShengBacklight')
++nxt = min((r[0] for r in rows if r[0] > vt[0] and r[1].lower() == vt[1].lower()), default=None)
++relocs = subprocess.run(['llvm-objdump', '--macho', '-r', obj], capture_output=True, text=True, check=True).stdout
++heads = subprocess.run(['llvm-objdump', '--macho', '--section-headers', obj], capture_output=True, text=True, check=True).stdout
++# the first DATA __const section holds the vtable; relocation addresses are relative to its start
++addr = next(int(p[3], 16) for p in (l.split() for l in heads.split('\n')) if len(p) >= 5 and p[1] == '__const' and p[4] == 'DATA')
++entries, inside = {}, False
++for line in relocs.split('\n'):
++    if line.startswith('Relocation information'):
++        inside = line.startswith('Relocation information (__DATA,__const)')
++        continue
++    m = re.match(r'([0-9a-f]{8})\s.*\s(\S+)$', line)
++    if inside and m: entries[int(m.group(1), 16)] = m.group(2)
++base = vt[0] - addr
++size = (nxt - vt[0]) // 8 if nxt else None
++slot = entries.get(base + 8 * 9)
++want = int(sys.argv[2]) if len(sys.argv) > 2 else None
++print(f'vtable entries: {size}, slot 2+7: {slot}')
++ok = slot == '__ZNK14ShengBacklight12getMetaClassEv' and size is not None and (want is None or size == want)
++print('OK' if ok else 'MISMATCH'); sys.exit(0 if ok else 1)
