@@ -72,6 +72,7 @@ jobs:
       - name: Host tools
         run: |
           brew install bash coreutils llvm lld mtools dtc glslang shaderc spirv-tools bison flex
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"   # keg-only llvm on Intel (/usr/local), see macos-qemu-storage
           command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
       - name: Toolchain report
         run: |
@@ -289,6 +290,8 @@ jobs:
       - name: Host tools
         run: |
           brew install bash coreutils llvm lld mtools dtc qemu nasm
+          # keg-only llvm: UniXNU scripts take llvm-nm & co. from PATH, else /opt/homebrew (arm64 only; run 45283950842)
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
           qemu-system-aarch64 --version | head -1
       - name: Pinned UniXNU, uefi-pipa (the panic screen font of the payload step) and hakios-pipa patches

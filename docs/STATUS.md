@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 9, 24 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 10, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,28 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — kernel, firmware, payload, boot image, root image dan
   anchor kunci owner belum ada; hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 10 (WSL2 + GitHub Actions Intel; tidak ada boot, flash, atau perubahan slot)
+
+BUILD PASS ≠ RUNTIME PASS ≠ GPU HARDWARE ACCELERATION PASS: semua di bawah adalah build dan pemeriksaan offline.
+
+| Pemeriksaan | Hasil | Bukti |
+| --- | --- | --- |
+| Penyebab ADT gagal | generator `devicetree.generate()` UniXNU (pin dan upstream) hanya menerima satu node memory dengan satu rentang; DTS pipa (benar) punya dua bank di sekitar celah bootloader `0xbbb00000..0xc0000000` | [MEMORY.md](MEMORY.md) |
+| Representasi RAM | Bank tetap terpisah; ADT `dram-base/size` = span `0x80000000+0x200000000` (dipakai XNU hanya untuk `is_dram_addr`); memori kernel = window DarwinBoot dari satu run conventional UEFI, yang tidak bisa memuat celah. Patch `patches/unixnu/0006` | `tests/test_adt_dram.py` (8) |
+| Rencana memori offline (`tools/memory_plan.py`) | **PASS**: window `0x170000000` hanya muat di `0xffe00000..0x280000000`, sisa 258 MiB untuk alokasi UEFI (hanya terbukti saat boot; bila kurang, DarwinBoot menolak dengan "NO WINDOW") | `tests/test_memory_plan.py` (7) |
+| UUID volume Data | **Ditemukan**: kernel `81fa3170…` menanam UUID Data penulis port (`73F1FA24…`), seed pemilik `data.dbr` berisi volume lain. UniXNU mengikat keduanya di `runtime.prepare`, yang tidak pernah jalan untuk pipa (tanpa `[payload.runtime]`), dan payload tidak memeriksanya. `kernel-two-stage.sh` kini menerapkan aturan UniXNU sendiri (`HAKIOS_DATA_SEED`); nilai UUID tidak dicatat | `tools/payload_check.py` |
+| Kernel tahap B baru | `1d02cbe8d9992f32ad8e96ac2a475e41eba8667fdb7c52d42162e940deb3dc59` (53 899 264 B, 26 409 ekspor): **reproducible** (dua clean build di path sama identik); tahap A tetap `1b094fd6…`. Recheck HID PASS (52 simbol), storage ABI transfer pada kernel final PASS, anchor + 2 kebijakan VerifiedRoot tertanam. `81fa3170…` tetap disimpan sebagai baseline sesi 8 (UUID Data lain) | `evidence/repro-v4-run{1,2}` |
+| Addon di tahap B lokal | builder in-tree SKIP (tanpa iphoneos SDK) diterima **hanya** untuk addon eksternal yang lolos `tools/owner_trust.py` (owner-trust = byte CI `89bcf73f…`) | `stage-b.log` |
+| Payload | **BUILD PASS**, `payload.img` 128 MiB `2b88a52c…`; `tools/payload_check.py` **PASS** (18 cek: kernel diparse seperti DarwinBoot, ADT span/window/memory-map, trust cache aturan DarwinBoot 2557 hash, addon = addon terverifikasi dan ketiga Mach-O-nya tercakup, UUID seed = kernel, layout window dipakai `0x4efc000`) | `evidence/payload-v4/` |
+| Ukuran boot image | **Ditemukan**: dengan `size_mib = 192` boot image 204 132 352 B > `boot_b` 201 326 592 B (ABL menolak dan menandai slot unbootable, 17 Nov). Patch `patches/unixnu-pipa/0011`: 128 MiB → boot image **137 023 488 B**. `image_consistency.py` kini menolak image di atas partisi | `tests/test_image_consistency.py` |
+| Firmware uefi-pipa (lokal WSL) | **BUILD PASS**, `SILICIUM_UEFI.fd` `bd39c37a…` (pin hakios, DarwinBoot dengan window) | lokal |
+| Image consistency | **IMAGE CONSISTENT**: ramdisk = payload, payload kernel = kernel yang dibangun, kernel image = BootShim + FD, DTB yang ditambahkan = `pipa.dtb`, ukuran ≤ `boot_b`. Penanda IMG4 hanya dari string kernel Apple: NOTE, image lokal saja | `boot.img` `6cbdba80…` |
+| Reproducibility Turnip | Penyebab: urutan, bukan isi (18 420 string sama, urutan lain). Dengan `PYTHONHASHSEED=0` dua clean build di runner yang sama **identik** (`e2319655…`, UUID `30C7371C…`, 0 objek/sumber berbeda). Bahwa seed acak adalah satu-satunya penyebab antar-run belum dibandingkan antar-runner | artifact `turnip-repro-*` run 45283950842 |
+| CI regression (Intel) | `macos-firmware` **PASS** (run 45283950842), GPU 15/26 lihat di bawah; `macos-qemu-storage` gagal: `patch-xnu-entry-probe.py` mencari `llvm-nm` di `/opt/homebrew` (Homebrew arm64), di Intel ada di `/usr/local` → llvm Homebrew masuk `GITHUB_PATH`; `macos-kernel` di-skip karena bergantung padanya | log job 138075278746 |
+| Dual boot MODE A | Menu payload asli: Android default, timeout 10 s, entri android/xnu/recovery/reset/shutdown/tools, storage_safety tanpa FAIL. **Tidak diuji di tablet** | `verify_bootimg.check_unixnu` |
+| Dual boot MODE B | **Tidak tercapai**: entri Android kedua menu (UniXNU dan U-Boot) adalah `reset`; dengan menu di `boot_<aktif>` itu kembali ke menu yang sama (loop). Handoff nyata ke boot image Android stock (kernel 4.19, vendor_boot, dtbo, cmdline/bootconfig ABL, AVB) belum ada di firmware mana pun | [MODE-B.md](MODE-B.md) |
+| Akselerasi GPU di tablet | **NOT TESTED** (tidak ada boot) | — |
 
 ## Sesi 9 (WSL2 + GitHub Actions; push lewat `gh auth login` pemilik)
 

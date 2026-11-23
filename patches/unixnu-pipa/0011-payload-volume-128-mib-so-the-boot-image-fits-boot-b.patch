@@ -1,0 +1,16 @@
+diff --git a/board.toml b/board.toml
+index 3ad1e22..1b1f2b5 100644
+--- a/board.toml
++++ b/board.toml
+@@ -209,7 +209,10 @@ home-button-type = 2
+ # block lies below 0x80000000. The 16 GB reference unit also had a bank at 32 GiB, which this unit does not carry.
+ [payload]
+ volume = "PIPAESP"
+-size_mib = 192
++# 128, not 192: the boot image is this volume + the firmware (~3 MiB) + headers. With 192 it is 204 132 352 bytes, above
++# the 8 GB unit's boot_b (0xC000000 = 201 326 592, fastboot getvar 2026-11-16); ABL refuses a boot image larger than the
++# partition even for `fastboot boot` and then marks the slot unbootable. The payload uses ~66 MB (session 10).
++size_mib = 128
+ loader = "firmware"
+ title = "Xiaomi Pad 6 (iPadOS 17.7.11)"
+ dram_size = "0x200000000"

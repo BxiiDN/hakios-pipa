@@ -44,6 +44,32 @@ class Consistency(unittest.TestCase):
     def test_other_firmware_fails(self):
         self.assertTrue(any('built firmware' in t for t in fails(check(image(fv=b'_FVH' + b'G' * 9000), KERNEL, FIRMWARE, payload()))))
 
+    def test_image_larger_than_the_boot_partition_fails(self):
+        img = image()
+        self.assertTrue(any('fits the boot partition' in t for t in fails(check(img, KERNEL, FIRMWARE, payload(), max_bytes=len(img) - 1))))
+        self.assertEqual(fails(check(img, KERNEL, FIRMWARE, payload(), max_bytes=len(img))), [])
+
+    def test_img4_strings_of_the_kernel_are_a_note_not_a_failure(self):
+        kernel = KERNEL + b'no img4_object provided'
+        pl = payload(kernel)
+        results = check(image(pl=pl), kernel, FIRMWARE, pl)
+        self.assertEqual(fails(results), [])
+        self.assertTrue(any(level == 'NOTE' for level, _ in results))
+
+    def test_im4p_anywhere_fails(self):
+        kernel = KERNEL + b'IM4P'
+        pl = payload(kernel)
+        self.assertTrue(fails(check(image(pl=pl), kernel, FIRMWARE, pl)))
+
+    def test_appended_device_tree(self):
+        fdt = bytes.fromhex('d00dfeed') + (16).to_bytes(4, 'big') + bytes(8)
+        pl = payload()
+        img = vb.build_v0(gzip.compress(bytes(SHIM) + FIRMWARE, mtime=0) + fdt, pl, page=2048, kernel_addr=0x10008000)
+        self.assertEqual(fails(check(img, KERNEL, FIRMWARE, pl, dtb=fdt)), [])
+        self.assertTrue(any('given --dtb' in t for t in fails(check(img, KERNEL, FIRMWARE, pl, dtb=fdt[:-1] + b'x'))))
+        bad = vb.build_v0(gzip.compress(bytes(SHIM) + FIRMWARE, mtime=0) + b'junk', pl, page=2048, kernel_addr=0x10008000)
+        self.assertTrue(any('one FDT' in t for t in fails(check(bad, KERNEL, FIRMWARE, pl))))
+
     def test_other_payload_fails(self):
         self.assertTrue(any('ramdisk is payload.img' in t for t in fails(check(image(), KERNEL, FIRMWARE, payload() + b'\0'))))
 

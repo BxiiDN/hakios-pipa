@@ -9,6 +9,7 @@ that it carries nothing it should not. Read only.
   verify_bootimg.py --self-test        checks this file against images it builds
 """
 import gzip
+import zlib
 import hashlib
 import struct
 import sys
@@ -96,11 +97,20 @@ def check_unixnu(data, fields):
         problems.append('the kernel is not gzip (BootShim + firmware volume)')
     else:
         try:
-            shim = gzip.decompress(kernel)
+            # Image.gz-dtb (UniXNU bootimg.py): one gzip member, then the device tree
+            inflate = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            shim = inflate.decompress(kernel) + inflate.flush()
+            if not inflate.eof:
+                raise EOFError('truncated gzip stream')
             if shim[56:60] != b'ARM\x64':
                 problems.append('the decompressed kernel has no ARM64 image header (BootShim)')
             fields['firmware_bytes'] = len(shim)
-        except (OSError, EOFError) as error:
+            tail = inflate.unused_data
+            if tail:
+                if tail[:4] != b'\xd0\x0d\xfe\xed' or len(tail) < 8 or int.from_bytes(tail[4:8], 'big') != len(tail):
+                    problems.append(f'{len(tail)} bytes after the gzip stream are not one device tree')
+                fields['appended_dtb_bytes'] = len(tail)
+        except (OSError, EOFError, zlib.error) as error:
             problems.append(f'the kernel does not decompress: {error}')
     try:
         fat = Fat(ramdisk)
