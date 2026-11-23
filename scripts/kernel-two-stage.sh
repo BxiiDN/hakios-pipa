@@ -20,6 +20,15 @@ TREE=$OUTDIR/tree KERNEL=$OUTDIR/kernel/kernel.macho
 EV=${HAKIOS_EVIDENCE:-$ROOT/logs/two-stage}
 STAGE_PATCH=$ROOT/patches/stage-a/0001-reference-kernel-without-hid-and-legacy-display.patch
 mkdir -p "$EV"
+# Reproducible version string: XNU's config/newvers.pl stamps `date` into "Darwin Kernel Version ...: <date>" unless
+# KERNEL_BUILD_DATE is set ("allowing for reproducible builds"). Runs 45100879621 and 45104257856 built identical
+# archives but kernels that differ, and their version strings carry the build time. Use the commit date of the
+# UniXNU pin, in `date`'s own format.
+if [ -z "${KERNEL_BUILD_DATE:-}" ]; then
+	KERNEL_BUILD_DATE=$(TZ=UTC git -C "$WORK/UniXNU" log -1 --format=%cd --date=format-local:'%a %b %e %H:%M:%S UTC %Y')
+	export KERNEL_BUILD_DATE
+fi
+say "KERNEL_BUILD_DATE=$KERNEL_BUILD_DATE"
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }   # shasum is on macOS and Ubuntu alike
 NM=$(command -v llvm-nm || true); [ -n "$NM" ] || NM="xcrun nm"
 command -v brew >/dev/null && export PATH="$(brew --prefix llvm)/bin:$PATH"   # llvm-objcopy for the HID builder
