@@ -27,6 +27,7 @@ on:
       - tools/binary_diff.py
       - scripts/kernel-two-stage.sh
       - scripts/qemu-storage-abi.sh
+      - patches/unixnu-qemu/**
       - patches/stage-a/**
       - .github/workflows/unixnu-build.yml
 

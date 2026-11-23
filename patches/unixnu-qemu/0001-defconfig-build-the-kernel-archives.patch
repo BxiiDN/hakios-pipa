@@ -1,0 +1,14 @@
+diff --git a/configs/qemu_defconfig b/configs/qemu_defconfig
+index ac4bcd1..6c8e236 100644
+--- a/configs/qemu_defconfig
++++ b/configs/qemu_defconfig
+@@ -9,6 +9,9 @@
+ # NATIVE_ADRENO. SHENG_PMGR links the original-PMGR bridge (scripts/build-platform-power.py), without which the
+ # original AMFI panics with "No PMGR". XNU's video console draws nothing here despite -v: after the entry probe bars,
+ # the panic screen is the only kernel output on the frame buffer.
++# hakios-pipa: UniXNU 62f203c builds the [kernel] archives only with this switch (scripts/unixnu/kernel.py
++# build_archives); this board predates it.
++CONFIG_XNU_BUILD_ARCHIVES=y
+ 
+ CONFIG_XNU_SOURCE_CORECRYPTO14=y
+ CONFIG_XNU_SOURCE_PTHREAD=y

@@ -13,6 +13,7 @@ need qemu-system-aarch64
 git -C "$Q" fetch -q --depth 1 origin "$QEMU_PORT_REF" && git -C "$Q" checkout -q -f --detach FETCH_HEAD
 [ "$(git -C "$Q" rev-parse HEAD)" = "$QEMU_PORT_REF" ] || die "UniXNU-qemu is not at $QEMU_PORT_REF"
 say "UniXNU-qemu: $QEMU_PORT_REF"
+apply_patches "$Q" "$ROOT/patches/unixnu-qemu"   # version skew with UniXNU 62f203c, one change per patch
 if [ -z "${KERNEL_BUILD_DATE:-}" ]; then
 	KERNEL_BUILD_DATE=$(TZ=UTC git -C "$U" log -1 --format=%cd --date=format-local:'%a %b %e %H:%M:%S UTC %Y'); export KERNEL_BUILD_DATE
 fi
