@@ -22,6 +22,9 @@ on:
       - scripts/fetch-unixnu.sh
       - scripts/lib.sh
       - tools/build_manifest.py
+      - tools/candidate_provenance.py
+      - scripts/kernel-two-stage.sh
+      - patches/stage-a/**
       - .github/workflows/unixnu-build.yml
 
 permissions:
@@ -92,12 +95,23 @@ jobs:
           ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
           ./unixnu fetch
           ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
-      - name: Build kernel (XNU 10063.141.1, archives, prelink against the 21H461 kernelcache)
-        id: kernel
-        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+      # docs/BOOTSTRAP.md: the port's ABI builders qualify their drivers against an already prelinked kernel.
+      - name: Stage A -- reference kernel without ShengHidInput and the legacy display archive (never a boot image)
+        id: stage_a
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./unixnu build kernel
+          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
+        run: scripts/kernel-two-stage.sh a
+      - name: Stage B -- the full board against the stage-A kernel (XNU, every archive, final link, prelink)
+        id: stage_b
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
+        run: scripts/kernel-two-stage.sh b
+      - name: Recheck -- ShengHidInput qualified again against the final kernel; its bindings must not move
+        env:
+          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
+        run: scripts/kernel-two-stage.sh recheck
       - name: The end of each build log (failure only)
         if: failure()
         run: |

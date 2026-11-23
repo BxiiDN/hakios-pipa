@@ -1,0 +1,36 @@
+diff --git a/board.toml b/board.toml
+index 049a247..5c54e9c 100644
+--- a/board.toml
++++ b/board.toml
+@@ -74,7 +74,7 @@ archives = [
+   "build-verified-root-key.py",
+   "component:ShengUfs",
+   "component:AppleKeyStoreState",
+-  "component:ShengHidInput",
++  # stage A (hakios-pipa docs/BOOTSTRAP.md): no ShengHidInput -- its ABI builder qualifies against a prelinked kernel
+   "build-libpthread-kernel.py",
+   "build-corecrypto-14.py",
+   "build-corecrypto-14.py --namespace",
+@@ -83,7 +83,7 @@ archives = [
+   "build-boot-progress.py",
+   "build-adreno650.py",
+   "build-pipa-gpu-addon.py",
+-  "build-gop-legacy-display.py",
++  # stage A: no NativeLegacyDisplay archive -- it links ShengHidInput and copies the previous kernel as its reference
+   "check-pipa.py",
+ ]
+ 
+diff --git a/configs/pipa_defconfig b/configs/pipa_defconfig
+index 56c6308..680e010 100644
+--- a/configs/pipa_defconfig
++++ b/configs/pipa_defconfig
+@@ -19,7 +19,8 @@ CONFIG_XNU_NATIVE_UFS=y
+ CONFIG_XNU_NATIVE_ADRENO=y
+ CONFIG_XNU_NATIVE_ADRENO_ARCHIVE="{tree}/build/adreno650/libAdreno650.a"
+ CONFIG_XNU_NATIVE_MOBILE_DISPLAY=n
+-CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
++# stage A reference kernel only (hakios-pipa docs/BOOTSTRAP.md): never a boot candidate
++CONFIG_XNU_NATIVE_LEGACY_DISPLAY=n
+ CONFIG_XNU_BOOT_PROGRESS=y
+ CONFIG_XNU_BOOT_PROGRESS_STANDALONE=y
+ CONFIG_XNU_NATIVE_RAM_BLOCK=y
