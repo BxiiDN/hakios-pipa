@@ -63,7 +63,7 @@ jobs:
           python-version: "3.13"
       - name: Host tools
         run: |
-          brew install bash coreutils llvm lld mtools dtc glslang
+          brew install bash coreutils llvm lld mtools dtc glslang bison flex
           command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
       - name: Toolchain report
         run: |

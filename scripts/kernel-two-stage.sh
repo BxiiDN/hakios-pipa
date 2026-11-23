@@ -102,6 +102,9 @@ recheck)
 	;;
 gpu-userland)
 	command -v glslangValidator >/dev/null || die "glslangValidator missing (brew install glslang)"
+	# Mesa's ir3 parser needs bison >= 3 and flex; macOS ships bison 2.3 (run 45106011890: ir3_parser.c FAILED)
+	command -v brew >/dev/null && export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+	say "bison: $(bison --version | head -1); flex: $(flex --version | head -1)"
 	(cd "$U" && python3 - <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location('boot_runtime', 'scripts/build-boot-runtime.py')
@@ -109,7 +112,7 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 print('AdrenoMetal plugin:', module.build_plugin('ios'))
 PY
-	) > "$EV/gpu-userland.log" 2>&1 || { tail -80 "$EV/gpu-userland.log"; die "gpu-userland: Turnip/AdrenoMetal build failed"; }
+	) > "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; tail -60 "$U/.cache/mesa-tu-ios-build.log" 2>/dev/null; die "gpu-userland: Turnip/AdrenoMetal build failed"; }
 	tail -20 "$EV/gpu-userland.log"
 	for f in build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib build/adreno-metal-bridge/ios/libadreno_metal_bridge.a; do
 		[ -f "$U/$f" ] || die "gpu-userland: $f was not produced"
@@ -123,7 +126,7 @@ storage-static)
 	ref=$TREE/build/xnu-prelink/native-apfs-load-positive.macho; mkdir -p "$(dirname "$ref")"
 	[ -e "$ref" ] && die "$ref exists already; refusing to replace it"
 	cp "$OUTDIR/stage-a/kernel.macho" "$ref"; cp "$OUTDIR/stage-a/kernel.json" "${ref%.macho}.json"
-	set +e; (cd "$TREE" && python3 scripts/audit-storage-interface.py) > "$EV/storage-static.log" 2>&1; code=$?; set -e
+	code=0; (cd "$TREE" && python3 scripts/audit-storage-interface.py) > "$EV/storage-static.log" 2>&1 || code=$?   # lib.sh traps ERR
 	rm -f "$ref" "${ref%.macho}.json"
 	cat "$EV/storage-static.log" | tail -15
 	[ ! -f "$TREE/build/storage-abi/interface-audit.json" ] || die "interface-audit.json appeared; it must come from the live record only"
