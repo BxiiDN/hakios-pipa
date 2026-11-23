@@ -20,3 +20,7 @@ UEFI_PIPA_REF=1f6a1520f84c699a6f748e7b0b0ee72b79c7997b
 # iPadOS 17.7.11 (21H461) is built on this XNU (UniXNU profiles/os/ipados-17.7.11-21H461/profile.toml)
 XNU_TAG=xnu-10063.141.1
 XNU_REF=d8b80295118ef25ac3a784134bcf95cd8e88109f
+# The QEMU virt port (UniXNU devices.toml, revision pinned there): same iPad7,1 21H461 IPSW and kernelcache. Its
+# scripts/build-storage-abi.py makes the live QEMU/gdb record audit-storage-interface.py needs (docs/BOOTSTRAP.md).
+QEMU_PORT_REPOSITORY=https://github.com/xVanTuring/UniXNU-qemu
+QEMU_PORT_REF=97b75b1f63c6b7e895cd7646029db741d5fe5488
