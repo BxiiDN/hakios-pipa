@@ -1,0 +1,24 @@
+diff --git a/scripts/build-storage-abi.py b/scripts/build-storage-abi.py
+index 1c8ff01..391993b 100644
+--- a/scripts/build-storage-abi.py
++++ b/scripts/build-storage-abi.py
+@@ -5,7 +5,7 @@ UniXNU's audit-storage-interface.py reads three inputs that no UniXNU script pro
+ them from this board's own kernel, then runs the audit unchanged:
+ 
+ - The candidate: the kernel step's kernel.macho and its prelink plan, under the name the audit reads
+-  (build/native-prelink/native-apfs-load-positive.*). The original kexts sit at the same addresses in every kernel
++  (build/xnu-prelink/native-apfs-load-positive.*). The original kexts sit at the same addresses in every kernel
+   of this IPSW, so bindings taken from it hold for later kernels.
+ - The live observation: gdb-stop.py boots the candidate from the payload with offline-apfs-load=1, which loads APFS
+   and with it IOStorageFamily, stops at native_apfs_probe_checkpoint and reads the two metaclasses and the
+@@ -39,7 +39,9 @@ if not refer.is_dir():
+     refer.parent.mkdir(exist_ok=True)
+     refer.symlink_to(fetched[0])
+ 
+-candidate = ROOT / 'build/native-prelink/native-apfs-load-positive.macho'
++# hakios-pipa: UniXNU 62f203c's audit-storage-interface.py reads the candidate from build/xnu-prelink
++# (native-prelink before the 2026-10-25 rename).
++candidate = ROOT / 'build/xnu-prelink/native-apfs-load-positive.macho'
+ candidate.parent.mkdir(parents=True, exist_ok=True)
+ shutil.copyfile(kernel, candidate)
+ shutil.copyfile(kernel.with_suffix('.json'), candidate.with_suffix('.json'))
