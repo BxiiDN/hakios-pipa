@@ -194,6 +194,11 @@ PY
 	[ -d "$m2v/.git" ] || git clone -q --filter=blob:none https://github.com/steelbrain/metal2vulkan.git "$m2v"
 	git -C "$m2v" checkout -q --detach 720ef1ce9ae2a2068999a8675717418b9416283e
 	command -v brew >/dev/null && export LLVM_AS="$(brew --prefix llvm)/bin/llvm-as"
+	# build-adreno-metal-bridge.py runs `cargo +1.98.0 build --target aarch64-apple-ios`; rustup fetches 1.98.0 on
+	# demand but not its iOS std (run 45262156041: E0463 "can't find crate for `core`" in typenum).
+	command -v rustup >/dev/null || die "gpu-userland: rustup missing"
+	rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios >> "$EV/gpu-userland.log" 2>&1 \
+		|| { tail -20 "$EV/gpu-userland.log"; die "gpu-userland: rust 1.98.0 with aarch64-apple-ios"; }
 	(cd "$TREE" && python3 scripts/build-adreno-metal-bridge.py --target ios) >> "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; die "gpu-userland: Metal bridge build failed"; }
 	tail -20 "$EV/gpu-userland.log"
 	for f in build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib build/adreno-metal-bridge/ios/libadreno_metal_bridge.a; do
