@@ -19,6 +19,10 @@ OUTDIR=$U/out/pipa/ipados-17.7.11-21H461/pipa
 TREE=$OUTDIR/tree KERNEL=$OUTDIR/kernel/kernel.macho
 EV=${HAKIOS_EVIDENCE:-$ROOT/logs/two-stage}
 STAGE_PATCH=$ROOT/patches/stage-a/0001-reference-kernel-without-hid-and-legacy-display.patch
+STAGE_PATCHES=("$ROOT"/patches/stage-a/*.patch)   # 0001, then 0002 (no storage bindings: no audit in stage A)
+# The live storage ABI record of the QEMU board (scripts/qemu-storage-abi.sh); stage B binds VirtioMmioBlock/RamBlock to it
+STORAGE_AUDIT=${HAKIOS_STORAGE_AUDIT:-$ROOT/logs/qemu-storage/interface-audit.json}
+IOSERVICE_OBJ=$TREE/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOService.cpo   # its DWARF: IOService size
 mkdir -p "$EV"
 # Reproducible version string: XNU's config/newvers.pl stamps `date` into "Darwin Kernel Version ...: <date>" unless
 # KERNEL_BUILD_DATE is set ("allowing for reproducible builds"). Runs 45100879621 and 45104257856 built identical
@@ -57,16 +61,35 @@ build() {  # build NAME
 	if skipped "$1" && [ "$1" = stage-b ]; then die "stage-b: a required archive input was skipped (above)"; fi
 }
 skipped() {  # skipped NAME: list builder SKIP lines; true when there is one
-	grep -h '^SKIP ' "$EV/$1-logs/"*.log 2>/dev/null | sort -u > "$EV/$1-skipped.txt" || true
+	grep -hE '^SKIP [A-Za-z0-9._-]+: ' "$EV/$1-logs/"*.log 2>/dev/null | sort -u > "$EV/$1-skipped.txt" || true
 	[ -s "$EV/$1-skipped.txt" ] || return 1
 	say "$1: builders that SKIPPED (their archive is not built):"; cat "$EV/$1-skipped.txt"
 }
 
+turnip_diagnostics() {  # evidence for a failed Turnip iOS compile: first errors, feature macros, SDK headers
+	local b=$U/build/mesa-tu-ios sdk d=$EV/turnip-diagnostics.txt
+	sdk=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
+	{ echo "== SDK $(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null) $sdk"
+	  for h in endian.h machine/endian.h dlfcn.h; do echo "-- $h: $([ -f "$sdk/usr/include/$h" ] && shasum -a 256 "$sdk/usr/include/$h" | cut -c1-16 || echo absent)"; done
+	  [ -f "$sdk/usr/include/endian.h" ] && grep -nE 'define|#if|#include' "$sdk/usr/include/endian.h" | head -40
+	  grep -nE 'Dl_info|dladdr|_POSIX_C_SOURCE|_DARWIN_C_SOURCE|__DARWIN_C_LEVEL' "$sdk/usr/include/dlfcn.h" 2>/dev/null | head -20
+	  echo "== HAVE_* in build.ninja"; grep -oE -- '-DHAVE_[A-Z0-9_]+' "$b/build.ninja" 2>/dev/null | sort | uniq -c
+	  echo "== meson header/function checks"; grep -E 'Has header "(endian|dlfcn)\.h"|Checking for function "dladdr"|Checking if .*endian' "$b/meson-logs/meson-log.txt" 2>/dev/null | head
+	  echo "== first compile errors"; grep -hE 'error:|FAILED:' "$U/.cache/mesa-tu-ios-build.log" "$EV/gpu-userland.log" 2>/dev/null | head -30
+	  echo "== first failing command"; grep -h -A1 '^FAILED:' "$U/.cache/mesa-tu-ios-build.log" 2>/dev/null | head -4 | cut -c1-1500
+	} > "$d" 2>&1 || true
+	cat "$d"
+	# Annotations are readable on the public run page and API without a login: one per section, newlines as %0A.
+	if [ -n "${GITHUB_ACTIONS:-}" ]; then
+		awk '/^== /{if(m)print m; m=$0; next}{m=m "%0A" $0} END{if(m)print m}' "$d" | head -10 | cut -c1-4000 | while IFS= read -r line; do echo "::error title=turnip-diagnostics::$line"; done
+	fi
+}
+
 case $stage in
 a)
-	git -C "$P" apply --check "$STAGE_PATCH" || die "stage-A patch does not apply to the patched port"
-	git -C "$P" apply "$STAGE_PATCH"
-	trap 'git -C "$P" apply -R "$STAGE_PATCH" && say "stage-A patch removed from the port"' EXIT
+	git -C "$P" apply --check "${STAGE_PATCHES[@]}" || die "stage-A patches do not apply to the patched port"
+	git -C "$P" apply "${STAGE_PATCHES[@]}"
+	trap 'git -C "$P" apply -R "${STAGE_PATCHES[@]}" && say "stage-A patches removed from the port"' EXIT
 	rm -f "$KERNEL" "$OUTDIR/kernel/kernel.json"
 	build stage-a
 	python3 "$ROOT/tools/candidate_provenance.py" record --kernel "$KERNEL" --plan "$OUTDIR/kernel/kernel.json" \
@@ -78,6 +101,14 @@ a)
 	;;
 b)
 	git -C "$P" apply --check -R "$STAGE_PATCH" 2>/dev/null && die "the stage-A patch is still applied to the port"
+	# Storage ABI: the QEMU record may bind pipa's drivers only if the stage-A pipa kernel carries the same original
+	# IOStorageFamily class at the same addresses (tools/storage_abi_transfer.py). Nothing in the record is edited.
+	[ -f "$STORAGE_AUDIT" ] || die "no interface-audit.json at $STORAGE_AUDIT (scripts/qemu-storage-abi.sh; HAKIOS_STORAGE_AUDIT)"
+	python3 "$ROOT/tools/storage_abi_transfer.py" --audit "$STORAGE_AUDIT" --kernel "$OUTDIR/stage-a/kernel.macho" \
+		--plan "$OUTDIR/stage-a/kernel.json" --unixnu "$U" --dwarf "$IOSERVICE_OBJ" --json "$EV/storage-transfer-stage-a.json" \
+		|| die "the QEMU storage record does not transfer to the stage-A pipa kernel"
+	mkdir -p "$TREE/build/storage-abi"; cp "$STORAGE_AUDIT" "$TREE/build/storage-abi/interface-audit.json"
+	say "storage ABI record installed: $(sha "$STORAGE_AUDIT")"
 	if [ -f "$EV/gpu-userland.env" ]; then export "$(cat "$EV/gpu-userland.env")"; say "GPU userland from $UNIXNU_GPU_WORK"; fi
 	# build-platform-power.py (with a reference kernel) reads the original kernelcache at the port's path
 	# .cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed; UniXNU 62f203c keeps it in out/ipsw/<build>.
@@ -90,6 +121,11 @@ b)
 		--plan "$OUTDIR/stage-a/kernel.json" --provenance "$EV/stage-a-provenance.json" --tree "$TREE"
 	build stage-b
 	cp "$TREE/build/sheng-hid-input/abi-audit.json" "$EV/stage-b-hid-abi-audit.json"
+	for c in virtio-mmio-block-verified ram-block; do
+		[ -f "$TREE/build/$c/bindings.json" ] || die "stage-b: no $c bindings.json"; cp "$TREE/build/$c/bindings.json" "$EV/stage-b-$c-bindings.json"
+	done
+	python3 "$ROOT/tools/storage_abi_transfer.py" --audit "$STORAGE_AUDIT" --kernel "$KERNEL" --plan "$OUTDIR/kernel/kernel.json" \
+		--unixnu "$U" --dwarf "$IOSERVICE_OBJ" --json "$EV/storage-transfer-final.json" || die "final kernel: storage bindings do not hold"
 	;;
 recheck)
 	[ -f "$EV/stage-b-hid-abi-audit.json" ] || die "no stage-B HID audit; run stage b first"
@@ -112,7 +148,7 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 print('AdrenoMetal plugin:', module.build_plugin('ios'))
 PY
-	) > "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; tail -60 "$U/.cache/mesa-tu-ios-build.log" 2>/dev/null; die "gpu-userland: Turnip/AdrenoMetal build failed"; }
+	) > "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; tail -60 "$U/.cache/mesa-tu-ios-build.log" 2>/dev/null; turnip_diagnostics; die "gpu-userland: Turnip/AdrenoMetal build failed"; }
 	tail -20 "$EV/gpu-userland.log"
 	for f in build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib build/adreno-metal-bridge/ios/libadreno_metal_bridge.a; do
 		[ -f "$U/$f" ] || die "gpu-userland: $f was not produced"

@@ -1,0 +1,17 @@
+diff --git a/scripts/build-xnu-4k-baseline.sh b/scripts/build-xnu-4k-baseline.sh
+index 8f9d3cf..87785d9 100755
+--- a/scripts/build-xnu-4k-baseline.sh
++++ b/scripts/build-xnu-4k-baseline.sh
+@@ -730,6 +730,12 @@ records = [json.loads(Path(p).with_name('bindings.json').read_text()) for p in s
+ for archive, record in zip(sys.argv[1:], records):
+     path = Path(archive)
+     obj = path.with_name(path.stem.removeprefix('lib') + '.o')
++    if not obj.exists():
++        # build-virtio-mmio-bindings.py writes the object under the component's runtime name (NativeVirtioBlock.o,
++        # NativeRamBlock.o) into the canonical archive; that object must be the archive's own member, byte for byte.
++        obj = path.with_name({'VirtioMmioBlock': 'NativeVirtioBlock', 'RamBlock': 'NativeRamBlock'}[path.stem.removeprefix('lib')] + '.o')
++        if obj.read_bytes() not in path.read_bytes():
++            raise SystemExit('Re-audit the actual compiled storage object before linking')
+     if hashlib.sha256(obj.read_bytes()).hexdigest() != record['compiled_object_sha256']:
+         raise SystemExit('Re-audit the actual compiled storage object before linking')
+ first, second = [record['bindings'] for record in records]

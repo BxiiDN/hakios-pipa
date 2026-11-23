@@ -8,6 +8,9 @@ source "$(dirname "$0")/lib.sh"
 U=$WORK/UniXNU Q=$WORK/UniXNU-qemu
 EV=${HAKIOS_EVIDENCE:-$ROOT/logs/qemu-storage}
 mkdir -p "$EV"
+# gdb-stop.py looks for share/qemu/edk2-aarch64-code.fd beside the QEMU it finds (Homebrew layout). Elsewhere
+# (Ubuntu: qemu-efi-aarch64's AAVMF_CODE.no-secboot.fd) HAKIOS_QEMU_PREFIX names a prefix with that layout.
+[ -n "${HAKIOS_QEMU_PREFIX:-}" ] && export PATH="$HAKIOS_QEMU_PREFIX/bin:$PATH"
 need qemu-system-aarch64
 [ -d "$Q/.git" ] || { git init -q "$Q"; git -C "$Q" remote add origin "$QEMU_PORT_REPOSITORY"; }
 git -C "$Q" fetch -q --depth 1 origin "$QEMU_PORT_REF" && git -C "$Q" checkout -q -f --detach FETCH_HEAD
@@ -30,6 +33,15 @@ step payload ./unixnu build payload -D ../UniXNU-qemu --unique-chip-id "$seed"
 tree=$(dirname "$(dirname "$(find "$U/out" -path '*/tree/scripts/build-storage-abi.py' | head -1)")")
 [ -d "$tree" ] || die "no QEMU build tree with scripts/build-storage-abi.py"
 say "== storage ABI (live QEMU/gdb) in $tree"
+# On Linux, xcrun is UniXNU's shim: the SDK is the tree's fakeroot, exactly as UniXNU's own kernel step sets it
+# (scripts/unixnu/kernel.py: UNIXNU_SDKROOT, UNIXNU_SDK_VERSION=17.0). audit-storage-interface.py copies its
+# TargetConditionals.h from there and records that header's digest and the SDK version.
+# Its tools (xcrun nm, c++filt) are the cctools/LLVM of UniXNU's Linux toolchain, first on PATH as in that step.
+if [ "$(uname -s)" = Linux ]; then
+	tc=${UNIXNU_TOOLCHAIN:-/opt/unixnu-linux}
+	export UNIXNU_SDKROOT=$tree/.cache/fakeroot UNIXNU_SDK_VERSION=17.0 PATH="$tc/CommandLineTools/usr/bin:$tc/llvm/bin:$PATH" \
+		XNU_TOOLCHAIN_BIN="$tc/CommandLineTools/usr/bin $tc/XcodeDefault.xctoolchain/usr/bin"
+fi
 (cd "$tree" && python3 scripts/build-storage-abi.py) > "$EV/storage-abi.log" 2>&1 || { tail -80 "$EV/storage-abi.log"; die "build-storage-abi.py failed"; }
 tail -8 "$EV/storage-abi.log"
 audit=$tree/build/storage-abi/interface-audit.json

@@ -1,0 +1,13 @@
+diff --git a/scripts/build-darwinboot-efi.py b/scripts/build-darwinboot-efi.py
+index a861d1c..9e2a41a 100755
+--- a/scripts/build-darwinboot-efi.py
++++ b/scripts/build-darwinboot-efi.py
+@@ -34,6 +34,7 @@ env = dict(os.environ, WORKSPACE=str(work), CONF_PATH=str(conf), EDK_TOOLS_PATH=
+            PATH=os.pathsep.join([str(tools / 'BinWrappers/PosixLike'), str(tools / 'Source/C/bin'), os.environ['PATH']]))
+ subprocess.run(['build', '-p', 'DarwinBootPkg/DarwinBoot.dsc', '-a', 'AARCH64', '-b', 'DEBUG', '-t', 'CLANGPDB',
+                 '-n', str(os.cpu_count() or 4)], cwd=work, env=env, check=True, stdout=subprocess.DEVNULL)
+-built = work / 'Build/DarwinBoot/DEBUG_CLANGPDB/AARCH64/DarwinBoot.efi'
++# DarwinBoot.dsc: OUTPUT_DIRECTORY = build/DarwinBoot (lower case; macOS's file system ignores the case, Linux's does not)
++built = work / 'build/DarwinBoot/DEBUG_CLANGPDB/AARCH64/DarwinBoot.efi'
+ shutil.copyfile(built, work / 'DarwinBoot.efi')
+ print(work / 'DarwinBoot.efi')

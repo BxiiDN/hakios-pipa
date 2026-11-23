@@ -1,0 +1,15 @@
+diff --git a/scripts/qemu-entry/gdb-stop.py b/scripts/qemu-entry/gdb-stop.py
+index 8e0efdb..e89c069 100755
+--- a/scripts/qemu-entry/gdb-stop.py
++++ b/scripts/qemu-entry/gdb-stop.py
+@@ -402,7 +402,9 @@ for name in ('gdb-stop.json', 'gdb-failure.json'):
+ with (fixture / 'gdb-stderr.log').open('w') as errors:
+     process = subprocess.Popen(command, stdout=errors, stderr=errors)
+     try:
+-        deadline = time.monotonic() + 2
++        # QEMU opens its gdb port only after the pflash and the fat: ESP are set up; 2 s was enough on macOS, not on
++        # WSL2 (64 MiB AAVMF pflash, a 50 MB kernel in the vvfat ESP). A connection-wait limit, not an observation limit.
++        deadline = time.monotonic() + 60
+         while True:
+             try:
+                 connection = socket.create_connection(('127.0.0.1', port), timeout=args.timeout)

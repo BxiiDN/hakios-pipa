@@ -1,0 +1,18 @@
+diff --git a/board.toml b/board.toml
+--- a/board.toml
++++ b/board.toml
+@@ -66,9 +66,14 @@
+   "component:SoftwareAES",
+   "build-software-aes-bindings.py",
+   "component:RamBlock",
++  # hakios-pipa patch 0004: bind RamBlock to the original IOBlockStorageDevice recorded by audit-storage-interface.py
++  # (build/storage-abi/interface-audit.json, the live QEMU/gdb record; hakios-pipa tools/storage_abi_transfer.py proves
++  # the pipa kernel carries that original class at the same addresses), as UniXNU-pipa-reference's board does.
++  "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
+   # The verified variant of the read-only block transport (CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE) and the owner key it
+   # authenticates against; no virtio device exists on pipa, so the transport itself never configures.
+   "build-arm-driver.py VirtioMmioBlock --verified-root",
++  "build-virtio-mmio-bindings.py --component VirtioMmioBlock --directory build/virtio-mmio-block-verified",
+   # The pin is the anchor digest of the builder's own owner key ($UNIXNU_OWNER_KEY_SHA256), not EsaiJJ's 70a5ea34...:
+   # the root policies are signed with the private half, which never leaves its owner (hakios-pipa docs/OWNER-KEY.md).
+   "build-verified-root-key.py",
