@@ -1,0 +1,15 @@
+diff --git a/scripts/build-qca-bluetooth.py b/scripts/build-qca-bluetooth.py
+index 38cc658..c41307a 100644
+--- a/scripts/build-qca-bluetooth.py
++++ b/scripts/build-qca-bluetooth.py
+@@ -22,7 +22,9 @@ out.mkdir(parents=True, exist_ok=True)
+ 
+ if not (module / 'out/linux/btqca.c').is_file() or not (module / 'out/linux/btqca.h').is_file():
+     fetch_env = {**os.environ, 'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.sparseCheckoutCone', 'GIT_CONFIG_VALUE_0': 'false'}
+-    if not (module / 'deps/linux').exists():
++    # hakios-pipa 0005: QcaBluetooth 22ff97f (UniXNU 62f203c's pin) has no tools/fetch-linux.py; its prepare-linux.py
++    # downloads btqca.c/.h itself and refuses any file whose SHA-256 is not the one in tools/source-lock.json.
++    if not (module / 'deps/linux').exists() and (module / 'tools/fetch-linux.py').is_file():
+         subprocess.run([sys.executable, str(module / 'tools/fetch-linux.py')], check=True, env=fetch_env)
+     subprocess.run([sys.executable, str(module / 'tools/prepare-linux.py')], check=True)
+ 

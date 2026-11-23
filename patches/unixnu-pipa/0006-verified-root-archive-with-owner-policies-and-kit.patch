@@ -1,0 +1,97 @@
+diff --git a/scripts/build-verified-root-key.py b/scripts/build-verified-root-key.py
+index 678051d..d18af34 100755
+--- a/scripts/build-verified-root-key.py
++++ b/scripts/build-verified-root-key.py
+@@ -12,6 +12,12 @@ Inputs, never from the repository:
+   UNIXNU_OWNER_KEY_SHA256  sha256 of the 395-byte anchor the build must carry (or --pin); a mismatch stops the build
+   UNIXNU_OWNER_KEY_KIND    "owner" (default) or "ephemeral": a CI key made for one run, so the kernel can be
+                            compiled, linked and prelinked; it authorizes no root and the result is never a boot image
++  PIPA_VERIFIED_ROOT       (hakios-pipa 0006) the owner's signed root policies: OS/manifest.bin, SystemOS/manifest.bin
++                           (544-byte header-only envelopes, scripts/make-pipa-root-policy.py). The verified
++                           VirtioMmioBlock and NativeUfs link _verified_root_manifest(_bytes), _verified_root_policies
++                           and the kit's vr_open/vr_verify_block/_vr_xnu_crypto, so a full board kernel needs them;
++                           each must be signed for this anchor or the build stops. Without the directory only the
++                           anchor archive is made (enough for stage A, which links neither consumer).
+ """
+ import argparse
+ import hashlib
+@@ -65,15 +71,74 @@ if shutil.which('xcrun') and subprocess.run(['xcrun', '--sdk', 'iphoneos', '--sh
+ else:   # Linux toolchain (scripts/unixnu/kernel.py linux_env)
+     compiler = [os.environ.get('CROSS_CLANG', 'clang')]
+     ar = [shutil.which('llvm-ar') or 'ar']
++HEADER_BYTES, SIGNATURE_BYTES = 160, 384
++policy_dir = Path(os.environ['PIPA_VERIFIED_ROOT']) if os.environ.get('PIPA_VERIFIED_ROOT') else None
++records = []
++if policy_dir:
++    for window in ('OS', 'SystemOS'):
++        envelope = policy_dir / window / 'manifest.bin'
++        data = envelope.read_bytes()
++        if len(data) != HEADER_BYTES + SIGNATURE_BYTES or not data.startswith(b'VROOT01\0'):
++            raise SystemExit(f'{envelope}: expected a {HEADER_BYTES + SIGNATURE_BYTES}-byte header-only envelope')
++        version, header_bytes, block_bytes = struct.unpack_from('<3I', data, 8)
++        image_bytes, count = struct.unpack_from('<2Q', data, 24)
++        if (version, header_bytes, block_bytes) != (1, HEADER_BYTES, 4096) or count != (image_bytes + 4095) // 4096:
++            raise SystemExit(f'{envelope}: unexpected header fields')
++        if data[120:152] != hashlib.sha256(anchor).digest():
++            raise SystemExit(f'{envelope}: signed for a different anchor')
++        records.append(dict(window=window, manifest=str(envelope), image_bytes=image_bytes, block_count=count,
++                            manifest_sha256=hashlib.sha256(data).hexdigest()))
++    lines = ['.section __DATA_CONST,__const', '.balign 8']
++    for index, record in enumerate(records):
++        lines += [f'_pipa_root_policy_{index}:', f'.incbin "{record["manifest"]}"', '.balign 8']
++    lines += ['.globl _verified_root_manifest, _verified_root_manifest_bytes', '_verified_root_manifest = _pipa_root_policy_0',
++              '_verified_root_manifest_bytes:', f'.quad {HEADER_BYTES + SIGNATURE_BYTES}',
++              '.globl _verified_root_policies, _verified_root_policy_count', '_verified_root_policies:']
++    lines += [f'.quad _pipa_root_policy_{i}, {HEADER_BYTES + SIGNATURE_BYTES}' for i in range(len(records))]
++    lines += ['_verified_root_policy_count:', f'.quad {len(records)}',
++              # bsd_init calls native_verified_root_probe() only with the boot-arg offline-owner-root-check, UniXNU's
++              # QEMU self-test of the kit on embedded sample blocks. pipa never sets it and checks every root read in
++              # NativeUfs, so here the hook returns at once. (CONFIG_XNU_VERIFIED_ROOT_PROBE links the call.)
++              '.section __TEXT,__text,regular,pure_instructions', '.balign 4',
++              '.globl _native_verified_root_probe', '_native_verified_root_probe:', 'ret', '']
++    assembly.write_text(assembly.read_text() + '\n'.join(lines))
+ subprocess.run([*compiler, '-target', 'arm64-apple-ios17.0', '-c', str(assembly), '-o', str(obj)], check=True)
+-data = obj.read_bytes()
+-if struct.unpack_from('<4I', data) != (0xfeedfacf, 0x100000c, 0, 1):
+-    raise SystemExit('key object is not an ordinary ARM64 Mach-O object')
++objects = [obj]
++if policy_dir:
++    recipe = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json'
++    record = json.loads(recipe.read_text().strip().rstrip(','))
++    for source in (ROOT / 'kits/VerifiedRoot/src/verified_root.c', ROOT / 'kits/VerifiedRoot/adapters/xnu_crypto.c'):
++        destination = out / (source.stem + '.o')
++        arguments, command, index = record['arguments'], [], 0
++        while index < len(arguments):   # XNU's own compile record, its warning flags replaced by ours
++            value = arguments[index]
++            if value == record['file']:
++                command.append(str(source))
++            elif value == '-o':
++                command += ['-o', str(destination)]
++                index += 1
++            elif value in ('-MF', '-MJ'):
++                index += 1
++            elif value == '-Xclang' and index + 1 < len(arguments) and arguments[index + 1].startswith('-W'):
++                index += 1
++            elif value not in ('-MD', '-MP') and not value.startswith('-W'):
++                command.append(value)
++            index += 1
++        command += ['-I' + str(ROOT / 'kits/VerifiedRoot/include'), '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
++                    '-Wno-unknown-warning-option']
++        result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
++        (out / (source.stem + '.log')).write_text(result.stdout + result.stderr)
++        if result.returncode:
++            raise SystemExit(result.stderr[-3500:])
++        objects.append(destination)
++for o in objects:
++    if struct.unpack_from('<4I', o.read_bytes()) != (0xfeedfacf, 0x100000c, 0, 1):
++        raise SystemExit(f'{o} is not an ordinary ARM64 Mach-O object')
+ archive = out / 'libVerifiedRootKey.a'
+ archive.unlink(missing_ok=True)
+-subprocess.run([*ar, 'rcs', str(archive), str(obj)], check=True)
++subprocess.run([*ar, 'rcs', str(archive), *map(str, objects)], check=True)
+ (out / 'key.json').write_text(json.dumps(dict(
+-    anchor_sha256=digest, anchor_bytes=len(anchor), kind=kind, symbol='_verified_root_key',
++    anchor_sha256=digest, anchor_bytes=len(anchor), kind=kind, symbol='_verified_root_key', policies=records,
+     archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+     boot_candidate=kind == 'owner'), indent=2) + '\n')
+ print(f'libVerifiedRootKey.a: {kind} anchor {digest}')
