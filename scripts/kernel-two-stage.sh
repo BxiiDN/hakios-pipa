@@ -111,7 +111,7 @@ PY
 	;;
 storage-static)
 	[ -f "$OUTDIR/stage-a/kernel.macho" ] || die "no stage-A kernel; run stage a first"
-	ref=$TREE/build/xnu-prelink/native-apfs-load-positive.macho
+	ref=$TREE/build/xnu-prelink/native-apfs-load-positive.macho; mkdir -p "$(dirname "$ref")"
 	[ -e "$ref" ] && die "$ref exists already; refusing to replace it"
 	cp "$OUTDIR/stage-a/kernel.macho" "$ref"; cp "$OUTDIR/stage-a/kernel.json" "${ref%.macho}.json"
 	set +e; (cd "$TREE" && python3 scripts/audit-storage-interface.py) > "$EV/storage-static.log" 2>&1; code=$?; set -e

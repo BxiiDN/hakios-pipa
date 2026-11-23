@@ -151,6 +151,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 240
     env:
+      # Run 45104257856: two clean builds in one job differed only in PcdDxe.efi (the rest of Build/ identical), and the
+      # .fd only in the FFS header and the compressed DXE volume holding it. BaseTools builds the PCD database from
+      # Python sets of strings, whose order follows the per-process string hash seed; a fixed seed tests that.
+      PYTHONHASHSEED: '0'
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       HAKIOS_WORK: ${{ github.workspace }}/../work
     steps:
