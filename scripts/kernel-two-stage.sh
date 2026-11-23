@@ -58,11 +58,49 @@ evidence() {  # evidence NAME: archive hashes always; plan, hashes and exported 
 	python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [print("FP", k, v["sha256"]) for k, v in sorted(d["segments"].items())]; print("FP uuid", d["uuid"])' "$EV/$1-kernel-fingerprint.json"
 	say "$1: kernel.macho $(cat "$EV/$1-kernel-sha256.txt"), $(wc -l < "$EV/$1-kernel-exports.txt" | tr -d ' ') exported symbols"
 }
+# The owner's Data seed fixes CONFIG_XNU_OWNER_DATA_VOLUME_UUID: the kernel mounts Data by that UUID, and the APFS UUID of a
+# seed is random per installation (make-data-seed.py). UniXNU binds the two in runtime.prepare(kernel_build=True), which a
+# board without [payload.runtime] (pipa) never reaches; the port's defconfig carries its author's UUID. HAKIOS_DATA_SEED
+# applies UniXNU's own rule (runtime.seed_uuid, the same .config rewrite) after defconfig. The seed and its UUID stay local.
+bind_data_seed() {
+	[ -n "${HAKIOS_DATA_SEED:-}" ] || return 0
+	[ -f "$HAKIOS_DATA_SEED" ] || die "HAKIOS_DATA_SEED: no seed at $HAKIOS_DATA_SEED"
+	python3 - "$U" "$HAKIOS_DATA_SEED" "$OUTDIR/.config" <<'PY' || die "Data seed UUID could not be bound"
+import re, sys
+from pathlib import Path
+unixnu, seed, config = map(Path, sys.argv[1:])
+sys.path.insert(0, str(unixnu / 'scripts'))
+from unixnu.runtime import seed_uuid
+identity = seed_uuid(unixnu, seed)
+text, count = re.subn(r'^CONFIG_XNU_OWNER_DATA_VOLUME_UUID=.*$', f'CONFIG_XNU_OWNER_DATA_VOLUME_UUID="{identity}"', config.read_text(), flags=re.M)
+if count != 1:
+    sys.exit('the configuration needs exactly one CONFIG_XNU_OWNER_DATA_VOLUME_UUID')
+config.write_text(text)
+print('Data seed bound: CONFIG_XNU_OWNER_DATA_VOLUME_UUID from the seed (value kept out of the evidence)')
+PY
+}
+# A GPU addon built where its toolchain is (CI macOS: kernel-two-stage.sh gpu-addon) is not a kernel input: the payload carries
+# it (kernel.macho.gpuaddon). On a host without the iphoneos SDK build-pipa-gpu-addon.py prints SKIP; that SKIP is accepted
+# only when HAKIOS_GPU_ADDON_DIR holds an addon that tools/owner_trust.py verifies (CDHashes, coverage, CI trust bytes).
+external_addon_ok() {
+	[ -n "${HAKIOS_GPU_ADDON_DIR:-}" ] && [ -n "${HAKIOS_ORIGINAL_TRUST:-}" ] || return 1
+	python3 "$ROOT/tools/owner_trust.py" --addon "$HAKIOS_GPU_ADDON_DIR" --original "$HAKIOS_ORIGINAL_TRUST" \
+		--out "$EV/owner-trust-verified.bundle" > "$EV/external-addon.txt" 2>&1 || { cat "$EV/external-addon.txt"; return 1; }
+	cat "$EV/external-addon.txt"
+}
 build() {  # build NAME
-	(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa && ./unixnu build kernel) || { save_logs "$1"; evidence "$1"; skipped "$1" || true; die "$1: unixnu build kernel failed"; }
+	(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa) || die "$1: defconfig failed"
+	bind_data_seed
+	(cd "$U" && ./unixnu build kernel) || { save_logs "$1"; evidence "$1"; skipped "$1" || true; die "$1: unixnu build kernel failed"; }
 	save_logs "$1"; evidence "$1"
 	# A builder that prints SKIP and exits 0 has not built its archive: never a PASS for the full board.
-	if skipped "$1" && [ "$1" = stage-b ]; then die "stage-b: a required archive input was skipped (above)"; fi
+	if skipped "$1" && [ "$1" = stage-b ]; then
+		if [ "$(grep -cv '^SKIP build-pipa-gpu-addon: ' "$EV/$1-skipped.txt")" = 0 ] && external_addon_ok; then
+			say "stage-b: build-pipa-gpu-addon SKIPPED here; the addon is the verified external build in $HAKIOS_GPU_ADDON_DIR"
+		else
+			die "stage-b: a required archive input was skipped (above)"
+		fi
+	fi
 }
 skipped() {  # skipped NAME: list builder SKIP lines; true when there is one
 	grep -hE '^SKIP [A-Za-z0-9._-]+: ' "$EV/$1-logs/"*.log 2>/dev/null | sort -u > "$EV/$1-skipped.txt" || true

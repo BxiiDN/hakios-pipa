@@ -1,0 +1,55 @@
+diff --git a/scripts/unixnu/devicetree.py b/scripts/unixnu/devicetree.py
+index dd4839f..c7de5c2 100644
+--- a/scripts/unixnu/devicetree.py
++++ b/scripts/unixnu/devicetree.py
+@@ -287,6 +287,29 @@ def platform_node(name, table):
+     return node(name, properties, children)
+ 
+ 
++def dram_span(root):
++    """(dram-base, dram-size, banks) for /chosen from the hardware DTS memory nodes.
++
++    XNU's dram-base/dram-size are "the actual DRAM base address and size as reported by iBoot" (osfmk/arm/arm_init.c):
++    gDramBase/gDramSize, read only by is_dram_addr() to pick the memory attribute of a device (WIMG_IO/POSTED) mapping. The
++    memory the kernel manages is gPhysBase/gPhysSize, the DarwinBoot window from boot_args. A board whose DRAM is several
++    banks (pipa: a bootloader-reserved hole between two) therefore hands XNU the span from the first bank's base to the last
++    bank's end; the banks themselves stay separate here and nothing in the gaps is ever given to the kernel as memory.
++    One node with one range is the single-bank case."""
++    memory = [entry for entry in root.children if entry.strings('device_type') == ['memory'] and entry.enabled()]
++    banks = sorted(r for entry in memory for r in registers(entry))
++    if not banks:
++        raise Error('ADT handoff requires a DRAM range')
++    for base, size in banks:
++        if size == 0 or base + size > 1 << 64:
++            raise Error(f'DRAM bank {base:#x}+{size:#x} is empty or wraps')
++    for (base, size), (following, _) in zip(banks, banks[1:]):
++        if base + size > following:
++            raise Error(f'DRAM banks overlap at {following:#x}')
++    dram_base = banks[0][0]
++    return dram_base, banks[-1][0] + banks[-1][1] - dram_base, banks
++
++
+ def generate(dtb, config, *, unique_chip_id=None, data=False, trust=False, addon=False, root_policies=False):
+     root = read_fdt(Path(dtb).read_bytes())
+     entries = list(root.walk())
+@@ -299,12 +322,16 @@ def generate(dtb, config, *, unique_chip_id=None, data=False, trust=False, addon
+             handles[handle] = entry
+     payload, platform = config.get('payload', {}), config.get('adt', {})
+     options = payload.get('adt', {})
+-    memory = [entry for entry in root.children if entry.strings('device_type') == ['memory'] and entry.enabled()]
+-    if len(memory) != 1 or len(registers(memory[0])) != 1:
+-        raise Error('ADT handoff requires one contiguous DRAM range')
+-    dram_base, dram_size = registers(memory[0])[0]
++    dram_base, dram_size, banks = dram_span(root)
+     if payload.get('dram_size') is not None and int(str(payload['dram_size']), 0) != dram_size:
+         raise Error('payload.dram_size differs from the hardware DTS')
++    if options.get('owned_memory_size') and len(banks) > 1:
++        # DarwinBoot takes the kernel's window from one run of EfiConventionalMemory (AllocateWindow), never across a gap
++        # between banks: a window larger than every bank cannot be placed. Necessary, not sufficient (the firmware's own
++        # reservations inside a bank are only known at boot).
++        window = int(str(options['owned_memory_size']), 0)
++        if window > max(size for _, size in banks):
++            raise Error(f'Owned memory {window:#x} is larger than every DRAM bank: DarwinBoot cannot place it in one run')
+     # xnu-12377 takes 4 x 64 seed bytes on ARM and panics with fewer; older kernels read the first 64.
+     chosen = [('random-seed', os.urandom(256)), ('dram-base', struct.pack('<Q', dram_base)),
+               ('dram-size', struct.pack('<Q', dram_size)), *empty_nvram_proxy()]

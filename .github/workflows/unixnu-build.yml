@@ -52,19 +52,26 @@ jobs:
     # committed as owner/owner-public.pem, or -- while there is none -- an ephemeral key made in the run. An ephemeral
     # kernel proves compile, link and prelink only: it authorizes no root and is never a boot candidate.
     name: macos-kernel
-    runs-on: macos-26
+    # Stage B binds the storage drivers to the live QEMU record: the one this run's QEMU job made, never a local copy.
+    needs: macos-qemu-storage
+    runs-on: macos-26-intel
     timeout-minutes: 360
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       HAKIOS_WORK: ${{ github.workspace }}/../work
     steps:
       - uses: actions/checkout@v5
+      - name: Xcode 26 of this image
+        # macos-26-intel (session 10): the arm64 images were never acquired (run 45256692481); Xcode_26.6 is not on every image
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] || { echo "no Xcode 26 on this image"; ls /Applications; exit 1; }
+          echo "DEVELOPER_DIR=$x/Contents/Developer" >> "$GITHUB_ENV"; echo "$x"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Host tools
         run: |
-          brew install bash coreutils llvm lld mtools dtc glslang bison flex
+          brew install bash coreutils llvm lld mtools dtc glslang shaderc spirv-tools bison flex
           command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
       - name: Toolchain report
         run: |
@@ -100,6 +107,15 @@ jobs:
           ./unixnu fetch
           ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
       # docs/BOOTSTRAP.md: the port's ABI builders qualify their drivers against an already prelinked kernel.
+      - uses: actions/download-artifact@v4
+        with:
+          name: qemu-storage-evidence
+          path: ${{ runner.temp }}/qemu-storage-evidence
+      - name: The QEMU storage record of this run
+        run: |
+          a="$RUNNER_TEMP/qemu-storage-evidence/qemu-storage/interface-audit.json"
+          [ -f "$a" ] || { find "$RUNNER_TEMP/qemu-storage-evidence" -maxdepth 3; exit 1; }
+          shasum -a 256 "$a"; echo "HAKIOS_STORAGE_AUDIT=$a" >> "$GITHUB_ENV"
       - name: Stage A -- reference kernel without ShengHidInput and the legacy display archive (never a boot image)
         id: stage_a
         env:
@@ -115,6 +131,10 @@ jobs:
         env:
           HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
         run: scripts/kernel-two-stage.sh gpu-userland
+      - name: GPU addon in this tree (stage B's build-pipa-gpu-addon.py then has Turnip, the bridge and the original trust)
+        env:
+          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
+        run: scripts/kernel-two-stage.sh gpu-addon
       - name: Stage B -- the full board against the stage-A kernel (XNU, every archive, final link, prelink)
         id: stage_b
         env:
@@ -222,13 +242,18 @@ jobs:
     # Storage ABI, LIVE (docs/BOOTSTRAP.md): the QEMU virt board of the same IPSW, booted under QEMU TCG and observed
     # with UniXNU's gdb-stop.py; its interface-audit.json is what VirtioMmioBlock/RamBlock bind against. QEMU, not the
     # tablet: never a hardware result.
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 360
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       HAKIOS_WORK: ${{ github.workspace }}/../work
     steps:
       - uses: actions/checkout@v5
+      - name: Xcode 26 of this image
+        # macos-26-intel (session 10): the arm64 images were never acquired (run 45256692481); Xcode_26.6 is not on every image
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] || { echo "no Xcode 26 on this image"; ls /Applications; exit 1; }
+          echo "DEVELOPER_DIR=$x/Contents/Developer" >> "$GITHUB_ENV"; echo "$x"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -268,17 +293,22 @@ jobs:
         run: rm -rf "$HAKIOS_WORK/UniXNU/out"
 
   macos-firmware:
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 240
     env:
       # Run 45104257856: two clean builds in one job differed only in PcdDxe.efi (the rest of Build/ identical), and the
       # .fd only in the FFS header and the compressed DXE volume holding it. BaseTools builds the PCD database from
       # Python sets of strings, whose order follows the per-process string hash seed; a fixed seed tests that.
       PYTHONHASHSEED: '0'
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       HAKIOS_WORK: ${{ github.workspace }}/../work
     steps:
       - uses: actions/checkout@v5
+      - name: Xcode 26 of this image
+        # macos-26-intel (session 10): the arm64 images were never acquired (run 45256692481); Xcode_26.6 is not on every image
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] || { echo "no Xcode 26 on this image"; ls /Applications; exit 1; }
+          echo "DEVELOPER_DIR=$x/Contents/Developer" >> "$GITHUB_ENV"; echo "$x"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
