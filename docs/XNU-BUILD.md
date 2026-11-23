@@ -1,6 +1,6 @@
 # Build XNU 10063 (UniXNU) untuk pipa: status dan dependency
 
-**Status (sesi 6): kernel tahap A reproducible; ABI storage STATIC VERIFIED; Turnip iOS gagal compile; jalur live storage lewat board QEMU sedang dijalankan.** Sebelumnya, **status (sesi 5): kernel referensi tahap A berhasil di-link dan di-prelink, tetapi tahap A bukan image boot.**
+**Status (sesi 6): kernel tahap A reproducible; ABI storage STATIC VERIFIED; Turnip iOS gagal compile; ABI storage LIVE VERIFIED di QEMU (run 45111858703).** Sebelumnya, **status (sesi 5): kernel referensi tahap A berhasil di-link dan di-prelink, tetapi tahap A bukan image boot.**
 Kernel board lengkap (tahap B) gagal di langkah archive ke-20 dari 21 (`build-gop-legacy-display.py`, firmware
 perangkat). Setelah itu masih ada blocker kualifikasi storage. Jadi belum ada `kernel.macho` board lengkap, dan
 link final maupun prelink board lengkap belum terjadi. Detail di [BOOTSTRAP.md](BOOTSTRAP.md).

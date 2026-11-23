@@ -26,7 +26,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Toolchain Linux UniXNU (ubuntu-24.04) | **PASS** + `--check`: clang 24.0.0git `58c46bae` `602430b2…`, ld64 `c4fa3cd1…`, migcom `a080a836…`, iig `64d7b95c…`, lzfse `73d68a52…` | run 45077836807 |
 | Kernel referensi tahap A (bukan image boot) | **PASS (build), reproducible**: `d0ba5de5…` (51 974 144 B, UUID `c700fb3e…`) di tiga run dengan `KERNEL_BUILD_DATE` dipatok; beda di sesi 5 = tanggal build XNU | run 45105668358, 45106011890, 45107232121 |
 | Kernel board lengkap (tahap B) | **FAIL** di archive 20/21: firmware GMU/SQE/ZAP/touch perangkat tidak ada di CI. 19 archive PASS, termasuk ShengHidInput (ABI HID PASS terhadap kandidat tahap A), PMGR asli, Adreno 650, GPU addon, dan audit ABI display | run 45100879621, [BOOTSTRAP.md](BOOTSTRAP.md) |
-| Link final + prelink board lengkap | **BLOCKED**: firmware perangkat, lalu kualifikasi storage asli (butuh observasi live QEMU/gdb yang tidak bisa dibuat dengan UniXNU 62f203c) | [BOOTSTRAP.md](BOOTSTRAP.md) |
+| Link final + prelink board lengkap | **BLOCKED**: firmware perangkat (archive 20). Kualifikasi storage sudah tersedia dari QEMU (`interface-audit.json` `62f14fa0…`), tetapi belum dipasang ke board pipa | [BOOTSTRAP.md](BOOTSTRAP.md) |
 | Firmware uefi-pipa | **PASS (build), reproducible**: `SILICIUM_UEFI.fd` `8e989103…` di enam build bersih dari tiga run, dengan `PYTHONHASHSEED=0`. Sebelumnya hanya `PcdDxe.efi` yang berbeda antar-build (urutan PCD database di BaseTools ikut seed hash Python). `UniXNU.efi` `a2ceaf75…` tetap. Tidak dijalankan di tablet maupun QEMU | run 45104257856, 45105536415, 45105668358, 45106011890 |
 | Payload, boot image, root image | **BLOCKED** (butuh kernel + firmware) | — |
 | Validator userland iPadOS 17 (`tools/userland_check.py`) | Alat + test PASS; **NOT RUN** pada IPSW (tidak diunduh di sesi ini) | — |
@@ -51,7 +51,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Baterai / charging | PARTIAL / NOT TESTED | `NativeBattery` host test PASS |
 | Thermal / power | NOT TESTED | — |
 | Tombol | PARTIAL | Host test PASS |
-| Storage UFS | PARTIAL (ABI storage asli: STATIC VERIFIED, LIVE belum) | Root dipindah ke `ipados`; menurut source tidak ada tulis ke `userdata` |
+| Storage UFS | PARTIAL (ABI storage asli: STATIC VERIFIED dan LIVE VERIFIED di QEMU; hardware NOT TESTED) | Root dipindah ke `ipados`; menurut source tidak ada tulis ke `userdata` |
 | U-Boot | PARTIAL | Kompilasi + reproducible PASS di CI; belum diuji di tablet |
 | UEFI (uefi-pipa) | PARTIAL | Build PASS di CI; belum dijalankan di tablet |
 | Android boot | NOT TESTED | Tidak diubah |

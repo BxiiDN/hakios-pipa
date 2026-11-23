@@ -104,5 +104,11 @@ run 45107232121. Sidik jarinya dibuat oleh `tools/macho_fingerprint.py`.
 | Status | Hasil | Bukti |
 | --- | --- | --- |
 | ABI STATIC VERIFIED | **PASS**: semua pemeriksaan `audit-storage-interface.py` sebelum langkah live lolos pada kernel tahap A (190 slot, vtable unik, konstruktor/destruktor, getter metaclass) | run 45107232121, `kernel-two-stage.sh storage-static` |
-| ABI LIVE VERIFIED | **BELUM**. Jalurnya sudah ditemukan: board publik xVanTuring/UniXNU-qemu (97b75b1, IPSW dan kernelcache sama) punya `scripts/build-storage-abi.py`. Script itu mem-boot kernel board QEMU di QEMU TCG, menghentikannya dengan `gdb-stop.py` milik UniXNU di `native_apfs_probe_checkpoint`, membaca metaclass dan register translasi, lalu menjalankan audit tanpa diubah. Job `macos-qemu-storage` menjalankan jalur ini. Run pertama berhenti karena board QEMU belum mengenal `CONFIG_XNU_BUILD_ARCHIVES` (diperbaiki di `patches/unixnu-qemu/0001`) | run 45106011890, 45108598318 |
+| ABI LIVE VERIFIED | **PASS (guest QEMU virt, TCG)**: kernel board xVanTuring/UniXNU-qemu `fa7a7091…` (IPSW dan kernelcache sama; 10 archive, link, prelink; payload 192 MiB) di-boot di QEMU dan dihentikan oleh `gdb-stop.py` milik UniXNU. Hasil: ukuran instance live IOBlockStorageDevice 0x90 dan IOService 0x88, `live_native_4k` true, 190 slot, 176 binding. `interface-audit.json` `62f14fa0…` ditulis oleh `audit-storage-interface.py` yang tidak diubah. Butuh `patches/unixnu-qemu/0001–0003` (skew nama dan path dengan UniXNU 62f203c, satu perubahan per patch) | run 45111858703 |
 | RUNTIME HARDWARE VERIFIED | NOT TESTED (QEMU bukan tablet) | — |
+
+Langkah berikutnya untuk storage: board pipa belum punya langkah `build-virtio-mmio-bindings.py`. Board xVanTuring
+punya: `--component VirtioMmioBlock --directory build/virtio-mmio-block-verified` dan `--component RamBlock
+--directory build/ram-block`. Kedua langkah itu perlu ditambahkan, lalu `interface-audit.json` dari job QEMU dipakai
+sebagai input (job `needs:` atau artefak). Integrasi ini baru bisa diuji ujung-ke-ujung setelah blocker firmware
+archive display terpecahkan.
