@@ -112,3 +112,23 @@ punya: `--component VirtioMmioBlock --directory build/virtio-mmio-block-verified
 --directory build/ram-block`. Kedua langkah itu perlu ditambahkan, lalu `interface-audit.json` dari job QEMU dipakai
 sebagai input (job `needs:` atau artefak). Integrasi ini baru bisa diuji ujung-ke-ujung setelah blocker firmware
 archive display terpecahkan.
+
+## Sesi 7 (lokal di WSL2)
+
+- **Rekaman storage live dibuat ulang secara lokal** (QEMU TCG, `gdb-stop.py` UniXNU tanpa perubahan pada logika
+  observasinya). Perbaikan host: `TargetConditionals.h`/`nm` dari toolchain Linux UniXNU (lingkungan yang sama dengan
+  langkah kernel UniXNU), `-Wno-missing-designated-field-initializers` pada objek anotasi (clang 24), output
+  `build/DarwinBoot` huruf kecil (DSC), dan tenggat koneksi port gdb 60 s. Tidak ada syarat `audit-storage-interface.py`
+  yang dilonggarkan.
+- **Patch port 0004** menambahkan dua langkah `build-virtio-mmio-bindings.py` (RamBlock, VirtioMmioBlock) seperti board
+  xVanTuring; **stage-a 0002** mematikannya di tahap A. Tahap B memasang `interface-audit.json`
+  (`HAKIOS_STORAGE_AUDIT`) hanya setelah `tools/storage_abi_transfer.py` lolos pada kernel tahap A, dan memeriksa ulang
+  pada kernel final.
+- **Patch unixnu 0005**: pemeriksaan link membaca objek dengan nama runtime-nya (`NativeVirtioBlock.o`,
+  `NativeRamBlock.o`) dan kini juga menuntut objek itu identik dengan member arsip yang di-link.
+- **Patch port 0005** (QcaBluetooth 22ff97f tanpa `fetch-linux.py`) dan **0006** (arsip VerifiedRoot lengkap: anchor,
+  kebijakan OS/SystemOS bertanda tangan owner dari `PIPA_VERIFIED_ROOT`, `verified_root.c`, `xnu_crypto.c`).
+- Sumber Ath12kWifi: `fetch-sources.py` meng-clone branch `releng/15.1` yang sudah bergerak; commit terkunci
+  `95719d8a…` dipilih manual, sparse-checkout non-cone (git 2.53), lalu `--check` alat itu PASS. Perlu perbaikan di hulu.
+- Sisa blocker link: referensi `weak_import` backlight (lihat STATUS.md). Rute yang sesuai rancangan: tahap B di macOS
+  (ld Xcode), yang juga diperlukan untuk Turnip.

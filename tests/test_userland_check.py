@@ -86,3 +86,46 @@ class Userland(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FrameworkInSharedCache(unittest.TestCase):
+    """iOS 17: a framework's binary exists only as a shared-cache image; its bundle directory stays on disk."""
+    QC = 'System/Library/Frameworks/QuartzCore.framework'
+
+    def root(self, tmp, listed):
+        libs = ['/usr/lib/libSystem.B.dylib'] + (['/' + self.QC + '/QuartzCore'] if listed else [])
+        root = make_root(tmp, cache_libs=libs)
+        (root / self.QC / 'QuartzCore').unlink()
+        return root
+
+    def test_framework_image_in_cache_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            findings = uc.check(self.root(tmp, True))[0]
+            self.assertEqual(fails(findings), [])
+            self.assertTrue(any('QuartzCore' in t and 'image of the shared cache' in t for _, t in findings))
+
+    def test_framework_image_not_in_cache_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = fails(uc.check(self.root(tmp, False))[0])
+            self.assertTrue(any('QuartzCore' in t and 'neither on disk' in t for t in bad), bad)
+
+    def test_framework_bundle_missing_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.root(tmp, True)
+            (root / self.QC).rmdir()
+            self.assertTrue(any('QuartzCore' in t and 'missing' in t for t in fails(uc.check(root)[0])))
+
+
+class SevenZipListing(unittest.TestCase):
+    """The --dmg backend's reading of `7z l -slt` (synthetic text, no image)."""
+    TEXT = ('Path = System/Library/Frameworks/QuartzCore.framework\nSize = \nMode = drwxr-xr-x\nMethod = \n\n'
+            'Path = usr/lib/libz.dylib\nMode = lrwxr-xr-x\nMethod = symlink\n\n'
+            'Path = usr/libexec/backboardd\nMode = -rwxr-xr-x\nMethod = ZLIB-rsrc\n\n'
+            'Path = usr/libexec/backboardd:com.apple.ResourceFork\nMode = -rwxr-xr-x\nAlternate Stream = +\n\n')
+
+    def test_kinds_and_streams(self):
+        rows = {p: (k, m) for p, k, m in uc.parse_slt(self.TEXT)}
+        self.assertEqual(rows['System/Library/Frameworks/QuartzCore.framework'][0], 'dir')
+        self.assertEqual(rows['usr/lib/libz.dylib'][0], 'link')
+        self.assertEqual(rows['usr/libexec/backboardd'], ('file', 'ZLIB-rsrc'))
+        self.assertNotIn('usr/libexec/backboardd:com.apple.ResourceFork', rows)

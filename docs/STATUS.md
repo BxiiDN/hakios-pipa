@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 6, 23 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 7, 23 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,26 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — kernel, firmware, payload, boot image, root image dan
   anchor kunci owner belum ada; hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 7 (lokal, Windows 11 + WSL2 Ubuntu 26.04, tablet via adb Windows)
+
+Semua langkah di bawah dijalankan di PC pemilik, bukan CI. Tidak ada flash, repartisi, atau boot di tablet. Firmware,
+IPSW, kernel, kebijakan root dan rekaman QEMU disimpan di `~/.hakios-private` / `~/hakios/evidence`, tidak di Git.
+
+| Pemeriksaan | Hasil | Bukti |
+| --- | --- | --- |
+| Deteksi perangkat (read-only) | `pipa` / `23043RP34C`, SM8250, MemTotal 7 786 840 kB, HyperOS `OS4.0.8.0.XPZCNXM` (Android 17, slot `_b`, kernel kustom). Tanpa root. Panel: ABL melaporkan `mdss_dsi_m82_42_02_0b` (CSOT) (rekaman cmdline ABL unit ini, 17 Nov) | `adb getprop`, `dumpsys` |
+| Firmware `adb` | `/vendor` tidak terbaca (SELinux, tanpa root): GPU tidak ditarik | `collect-firmware.sh adb` |
+| Firmware `rom` + `vendor` (OTA resmi `OS2.0.16.0.UMZMIXM`, md5 `c378f929…` cocok) | **FIRMWARE PASS**: GMU `df79fa84…`, SQE `b4c27420…` (= pin port), ZAP `.elf` `dd930441…` (pin ROM resmi; pin port berasal dari port ColorOS), touch CSOT `ba7d0eb9…` (= pin port). ZAP tidak di-rename: segmen `.b00–.b02` identik, ditandatangani Xiaomi Root CA | `manifests/pipa-official-rom-OS2.0.16.0.UMZMIXM.txt` |
+| Kernel tahap A (lokal, toolchain Linux UniXNU, kunci owner `e8ae7ddf…`) | **PASS**: `kernel.macho` `7037ae25…` (51 097 600 B, UUID `cf5a56ba…`, 22 611 ekspor), provenance PASS. Build kedua di tree yang sama: hash identik (inkremental, bukan clean-room) | `two-stage/stage-a-provenance.json` |
+| Storage ABI LIVE (QEMU 10.2.1 TCG lokal, AAVMF no-secboot) | **PASS**: kernel board QEMU `b1a7c90f…`, `gdb-stop.json` `6620cee8…`, `interface-audit.json` `5105d252…`: 190 slot, 176 binding, ukuran live 0x90/0x88, native 4K. Butuh patch unixnu 0003/0004 dan unixnu-qemu 0004 (toolchain/host, bukan ABI) | `qemu-storage/` |
+| Transfer rekaman storage ke kernel pipa (`tools/storage_abi_transfer.py`) | **PASS 12/12** pada kernel tahap A: kernelcache pin, kode IOStorageFamily tidak berubah, vtable/metaclass/konstruktor/destruktor di alamat yang sama, 14 target asli + 176 ekspor native identik, IOService DWARF 0x88 | `storage-transfer-stage-a.json` |
+| Tahap B, archive | Storage binding RamBlock + VirtioMmioBlock **PASS**; VerifiedRoot (anchor + 2 kebijakan owner + kit) **PASS**; Adreno 650 **PASS** (31 objek); GOP legacy display (dengan firmware GMU/SQE/ZAP/touch) **PASS**; GPU addon **SKIP = FAIL** (Turnip iOS tidak ada); `check-pipa.py` jalan tetapi melewati cek firmware statisnya ("no uefi-pipa checkout") | `s7-stage-b.log` |
+| Link final | **FAIL**: 5 simbol `weak_import` backlight (`native_backlight_scale/stats`, `sheng_backlight_probe{,_result,_stage}`) tidak terdefinisi. ld64 cctools di Linux tidak bisa me-link referensi weak tak terdefinisi pada link statis (diuji: tanpa `-U` "symbol not found", dengan `-U` "branch out of range" ke 0). Tidak ditambal: definisi pengganti mengubah output diagnostik | `kernel.log` |
+| Prelink final, recheck HID, uji GPU addon, konsistensi kernel final | **NOT RUN** (butuh link final) | — |
+| Userland iPadOS 17.7.11 (IPSW iPad7,1 `21H461`, DMG OS `3f99b859…` + SystemOS `b4908cde…` dibaca in-place lewat 7z) | **USERLAND COMPLETE (bukan uji boot)**: launchd, backboardd, SpringBoard, mediaserverd, configd, wifid, Settings arm64 dan semua library ada; CoreGraphics, QuartzCore, Metal, IOSurface, IOKit, UIKit adalah image di dyld shared cache (54 file); 4 launchd job ada | `userland/userland-21H461.txt` |
+| Turnip iOS | **NOT BUILT**: butuh Xcode iphoneos SDK (tidak ada di WSL), dan push ke CI tidak tersedia dari PC ini. Analisis: `u_format_gen.h` memakai `RG88/GR88` di fungsi inline sendiri (17 tempat), jadi error = kedua cabang `UTIL_ARCH_*_ENDIAN` di header itu tidak terambil; `Dl_info` = `HAVE_DLADDR` terdefinisi tanpa `HAVE_DLFCN_H`. Keduanya bergantung pada deteksi header meson dengan SDK Xcode 26.6; build sukses sebelumnya (pipa-gpu-addon, Mesa pin yang sama) memakai `macos-15-intel`. CI kini mengirim diagnostik (`turnip-diagnostics`) sebagai anotasi publik | `scripts/kernel-two-stage.sh` |
+| Akselerasi GPU | **NOT TESTED** | — |
 
 ## Pemeriksaan offline (dengan bukti)
 
@@ -39,7 +59,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Komponen | Status | Catatan |
 | --- | --- | --- |
 | SoC, CPU | PARTIAL | Data board; host test; NOT TESTED |
-| GPU Adreno 650 | PARTIAL (archive kernel PASS; Turnip iOS FAIL compile; addon tidak dibangun; [ADRENO650.md](ADRENO650.md)) | KMD + GMU di UniXNU-pipa; `A650GmuTests` NOT RUN |
+| GPU Adreno 650 | PARTIAL (archive kernel PASS lokal sesi 7; Turnip iOS belum dibangun; addon SKIP; [ADRENO650.md](ADRENO650.md)) | KMD + GMU di UniXNU-pipa; `A650GmuTests` NOT RUN |
 | Akselerasi GPU | NOT TESTED | — |
 | Display | PARTIAL | Framebuffer firmware; 144 Hz BLOCKED (tidak ada driver DSI/DPU) |
 | Kecerahan | BLOCKED | KTZ8866 di I2C11: tidak ada driver GENI I2C maupun KTZ8866 di port |
