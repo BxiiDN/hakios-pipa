@@ -24,18 +24,18 @@ save_logs() {  # save_logs NAME
 	mkdir -p "$EV/$1-logs"
 	cp "$OUTDIR"/logs/*.log "$EV/$1-logs/" 2>/dev/null || true
 }
-evidence() {  # evidence NAME: plan, hashes and the exported symbols of the kernel just built
-	[ -f "$KERNEL" ] || return 0
+evidence() {  # evidence NAME: archive hashes always; plan, hashes and exported symbols of the kernel when one was built
+	find "$TREE/build" -name '*.a' -type f 2>/dev/null | sort | while read -r a; do echo "$(sha "$a")  $(wc -c < "$a" | tr -d ' ')  ${a#"$TREE"/}"; done > "$EV/$1-archives-sha256.txt"
+	say "$1: $(wc -l < "$EV/$1-archives-sha256.txt" | tr -d ' ') archives"; cat "$EV/$1-archives-sha256.txt"
+	[ -f "$KERNEL" ] || { say "$1: no kernel.macho"; return 0; }
 	cp "$OUTDIR/kernel/kernel.json" "$EV/$1-kernel.json"
 	[ -f "$OUTDIR/kernel/kernel.map.json" ] && cp "$OUTDIR/kernel/kernel.map.json" "$EV/$1-kernel.map.json"
-	{ echo "$(sha "$KERNEL")  kernel.macho ($(wc -c < "$KERNEL") bytes)"
-	  find "$TREE/build" -name '*.a' -type f | sort | while read -r a; do echo "$(sha "$a")  ${a#"$TREE"/}"; done
-	} > "$EV/$1-sha256.txt"
+	echo "$(sha "$KERNEL")  $(wc -c < "$KERNEL" | tr -d ' ')  kernel.macho" > "$EV/$1-kernel-sha256.txt"
 	$NM -g --defined-only "$KERNEL" 2>/dev/null | sort -k3 > "$EV/$1-kernel-exports.txt" || true
-	say "$1: kernel.macho $(head -1 "$EV/$1-sha256.txt")"
+	say "$1: kernel.macho $(cat "$EV/$1-kernel-sha256.txt"), $(wc -l < "$EV/$1-kernel-exports.txt" | tr -d ' ') exported symbols"
 }
 build() {  # build NAME
-	(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa && ./unixnu build kernel) || { save_logs "$1"; die "$1: unixnu build kernel failed"; }
+	(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa && ./unixnu build kernel) || { save_logs "$1"; evidence "$1"; die "$1: unixnu build kernel failed"; }
 	save_logs "$1"; evidence "$1"
 }
 
