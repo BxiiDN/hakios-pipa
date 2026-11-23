@@ -155,10 +155,13 @@ jobs:
     # pipa GPU addon was last built on macos-15 (Xcode 16) with this Mesa pin; macos-26 (Xcode 26.6) failed with
     # RG88/GR88 and Dl_info (run 45107232121). Uploads only what is compiled from open source (the dylib, the bridge
     # archive) with SHA-256s and the diagnostics; nothing from the IPSW.
+    # Intel images: run 45256692481's arm64 macos-15/macos-26 jobs were never acquired by a hosted runner ("not
+    # acquired ... after multiple attempts", arm64 capacity). Xcode's iphoneos SDK cross-compiles arm64 from x86_64
+    # the same way, so the dylib targets the same arm64 iOS 17 slice.
     strategy:
       fail-fast: false
       matrix:
-        image: [macos-15, macos-26]
+        image: [macos-15-intel, macos-26-intel]
     runs-on: ${{ matrix.image }}
     timeout-minutes: 240
     env:
