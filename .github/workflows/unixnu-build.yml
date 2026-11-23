@@ -195,6 +195,12 @@ jobs:
           openssl pkey -in "$RUNNER_TEMP/owner/e.pem" -pubout -out "$RUNNER_TEMP/owner/owner-public.pem"; rm -f "$RUNNER_TEMP/owner/e.pem"
           export UNIXNU_OWNER_PUBLIC_KEY="$RUNNER_TEMP/owner/owner-public.pem" UNIXNU_OWNER_KEY_KIND=ephemeral UNIXNU_OWNER_KEY_SHA256=unused
           scripts/kernel-two-stage.sh gpu-userland
+      - name: GPU addon (gpu-addon; a SKIP fails it)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          export UNIXNU_OWNER_PUBLIC_KEY="$RUNNER_TEMP/owner/owner-public.pem" UNIXNU_OWNER_KEY_KIND=ephemeral UNIXNU_OWNER_KEY_SHA256=unused
+          scripts/kernel-two-stage.sh gpu-addon
       - name: Outputs
         if: always()
         run: |

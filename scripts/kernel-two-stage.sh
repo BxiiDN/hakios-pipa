@@ -7,6 +7,9 @@
 #   kernel-two-stage.sh recheck  qualify ShengHidInput again against the final kernel; the bindings must not move
 #   kernel-two-stage.sh gpu-userland    Turnip (Mesa freedreno Vulkan, ARM64/iOS 17) and the AdrenoMetal bridge, with
 #                                UniXNU's own build-boot-runtime.py build_plugin('ios'); stage B then finds them
+#   kernel-two-stage.sh gpu-addon       pipa's build-pipa-gpu-addon.py on the gpu-userland tree: NativeAdrenoMetal.bundle,
+#                                adrenoprobed, owner-trust.bundle, gpu-addon-clients.bin. Its original trust modules come
+#                                from the IPSW members (tools/original_trust.py, pinned digests); a SKIP fails it
 #   kernel-two-stage.sh storage-static  UniXNU's audit-storage-interface.py against the stage-A kernel: its static
 #                                checks only. It cannot write interface-audit.json without the live QEMU/gdb record,
 #                                and this never claims one (docs/BOOTSTRAP.md "storage")
@@ -207,6 +210,38 @@ PY
 		file "$TREE/$f" | sed 's/^/  /'
 	done
 	echo "UNIXNU_GPU_WORK=$TREE" > "$EV/gpu-userland.env"
+	;;
+gpu-addon)
+	[ -f "$TREE/build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib" ] || die "gpu-addon: run gpu-userland first (no Turnip in $TREE)"
+	[ -f "$TREE/build/adreno-metal-bridge/ios/libadreno_metal_bridge.a" ] || die "gpu-addon: run gpu-userland first (no bridge in $TREE)"
+	# The two original trust modules (static + Cryptex1 System), read from the IPSW members only; nothing else of it.
+	for attempt in 1 2 3; do
+		(cd "$U" && ./unixnu ipsw fetch StaticTrustCache Cryptex1,SystemTrustCache -D ../UniXNU-pipa) > "$EV/gpu-addon-ipsw.log" 2>&1 && break
+		[ $attempt = 3 ] && { tail -20 "$EV/gpu-addon-ipsw.log"; die "gpu-addon: IPSW trust-cache members"; }
+		sleep 30
+	done
+	static=$(grep -E '/044-76040-038\.dmg\.trustcache$' "$EV/gpu-addon-ipsw.log" | tail -1)
+	system=$(grep -E '/044-76034-038\.dmg\.trustcache$' "$EV/gpu-addon-ipsw.log" | tail -1)
+	[ -f "$static" ] && [ -f "$system" ] || { cat "$EV/gpu-addon-ipsw.log"; die "gpu-addon: trust-cache members not where the log says"; }
+	python3 "$ROOT/tools/original_trust.py" --static "$static" --system "$system" --out "$TREE/build/original-static-system-trust" \
+		|| die "gpu-addon: the original trust modules are not the pinned ones"
+	(cd "$TREE" && UNIXNU_DEVICE="$P" UNIXNU_GPU_WORK="$TREE" python3 scripts/build-pipa-gpu-addon.py) > "$EV/gpu-addon.log" 2>&1 \
+		|| { tail -40 "$EV/gpu-addon.log"; die "gpu-addon: build-pipa-gpu-addon.py failed"; }
+	cat "$EV/gpu-addon.log"
+	grep -qE '^SKIP ' "$EV/gpu-addon.log" && die "gpu-addon: the builder SKIPPED (above): no addon was built"
+	A=$TREE/build/adreno-metal-plugin
+	for f in NativeAdrenoMetal.bundle trust.json owner-trust.bundle owner-trust.json gpu-addon-clients.bin; do
+		[ -e "$A/$f" ] || die "gpu-addon: $f was not produced"
+	done
+	# Publishable: what is compiled from source here and the JSON records. owner-trust.bundle carries Apple's two
+	# original modules: only its digest leaves the runner.
+	mkdir -p "$EV/addon"
+	cp -R "$A/NativeAdrenoMetal.bundle" "$EV/addon/"
+	cp "$A/trust.json" "$A/owner-trust.json" "$A/gpu-addon-clients.bin" "$EV/addon/"
+	[ -f "$A/adrenoprobed" ] && cp "$A/adrenoprobed" "$EV/addon/"
+	{ for f in "$A"/gpu-addon-clients.bin "$A"/owner-trust.bundle "$A"/adrenoprobed "$A"/NativeAdrenoMetal.bundle/NativeAdrenoMetal; do
+		[ -f "$f" ] && echo "$(sha "$f")  $(wc -c < "$f" | tr -d ' ')  ${f#"$TREE"/}"; done; } | tee "$EV/gpu-addon-sha256.txt"
+	file "$A/NativeAdrenoMetal.bundle/NativeAdrenoMetal" | sed 's/^/  /'
 	;;
 storage-static)
 	[ -f "$OUTDIR/stage-a/kernel.macho" ] || die "no stage-A kernel; run stage a first"
