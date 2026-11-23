@@ -63,3 +63,14 @@ dirender CPU — bandingkan fps keduanya. Sampai itu terlihat di unit pemilik: *
 | Error RG88/GR88, `Dl_info` | **AKAR BELUM TERBUKTI**. Fakta: `u_format_gen.h` memakai `RG88/GR88` di 17 fungsi inline sendiri (17 + 2 = 19 error), jadi kedua cabang `UTIL_ARCH_*_ENDIAN` tidak terambil; `Dl_info` muncul bila `HAVE_DLADDR` aktif tanpa `HAVE_DLFCN_H`. Header publik Apple (Libc-1752, dyld-1378, xnu-12377) tidak menunjukkan perubahan yang menjelaskannya. Job CI `macos-gpu` (matriks macos-15/macos-26) mengirim error pertama, makro `HAVE_*` dan header SDK sebagai anotasi publik | `.github/workflows/unixnu-build.yml` |
 | GPU addon (`NativeAdrenoMetal.bundle`, trust bundle) | **SKIP = FAIL**. Ini input payload (`--gpu-addon`), bukan bagian `kernel.macho` | — |
 | GPU HARDWARE ACCELERATION | **NOT TESTED**. Tidak ada klaim | — |
+
+## Status per lapisan (sesi 9, CI Intel + lokal)
+
+| Lapisan | Status | Bukti |
+| --- | --- | --- |
+| GPU USERLAND BUILD: Turnip iOS | **PASS (build)** di `macos-15-intel` (SDK 18.5) dan `macos-26-intel` (SDK 26.5), run 45271686452: arm64 dylib iOS minos 17.0, ABI KMD `drivers/Adreno650` | `docs/STATUS.md` sesi 9 |
+| AdrenoMetal bridge | **PASS (build)**, `91059a95…` di kedua image | idem |
+| GPU addon | **PASS (build), tanpa SKIP**; owner-trust direkonstruksi lokal = byte CI; semua import ada di dyld cache 21H461 | idem |
+| `A650GmuTests` | **PASS** (qemu-aarch64 user mode, gcc + clang, firmware perangkat) | `scripts/a650-gmu-tests.sh` |
+| GPU INTEGRATION (payload) | **BLOCKED** oleh ADT DRAM (dua rentang di DTS port, generator butuh satu); bukan masalah GPU | idem |
+| GPU HARDWARE ACCELERATION | **NOT TESTED** | — |

@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 8, 23 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 9, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,28 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — kernel, firmware, payload, boot image, root image dan
   anchor kunci owner belum ada; hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 9 (WSL2 + GitHub Actions; push lewat `gh auth login` pemilik)
+
+Audit riwayat sebelum push (71a88ba..bba1a66): tidak ada firmware biner, kunci privat, chip-id platform, serial perangkat,
+atau path/nama pribadi; hanya digest SHA-256 publik. Push tanpa force; tablet hanya dibaca (`fastboot getvar`: pipa, slot b
+successful), tidak di-flash atau di-reboot.
+
+| Pemeriksaan | Hasil | Bukti |
+| --- | --- | --- |
+| Runner GPU | arm64 `macos-15`/`macos-26` tidak pernah didapat ("not acquired by Runner of type hosted", run 45256692481) → matriks `macos-15-intel` + `macos-26-intel`; cross file Mesa menamai target `arm64-apple-ios17.0`, jadi output tetap arm64 iOS | `.github/workflows/unixnu-build.yml` |
+| Turnip iOS (`libvulkan_freedreno.dylib`) | **BUILD PASS di kedua image** (run 45271686452): Mach-O arm64 dylib, platform iOS, minos 17.0 (SDK 18.5 / 26.5); `-Dtu-darwin-abi-dir` = `drivers/Adreno650` pipa. RG88/GR88 dan Dl_info dari run 45107232121 **tidak muncul**: tanpa patch Mesa. Yang benar-benar diperbaiki dari log: tree baru tidak berisi `drivers/Adreno650`/`AdrenoMetal` (kini di-link dari port seperti `build-adreno650.py`), retry fetch, path artifact | log job 138032825471 / 138032825204 |
+| AdrenoMetal bridge (`libadreno_metal_bridge.a`) | **BUILD PASS**: metal2vulkan `720ef1ce` + 21 patch pipa, identik di kedua image (`91059a95…`). Perbaikan: std `aarch64-apple-ios` untuk Rust 1.98.0 (E0463) | idem |
+| GPU addon (`build-pipa-gpu-addon.py`) | **BUILD PASS tanpa SKIP** (stage `gpu-addon`; SKIP atau output hilang = gagal): NativeAdrenoMetal.bundle, adrenoprobed, owner-trust.bundle, gpu-addon-clients.bin (NGPUADD2, 11 file). Perbaikan: `glslc`/`spirv-val` (shaderc, spirv-tools). Modul trust asli dari member IPSW `StaticTrustCache` + `Cryptex1,SystemTrustCache` (`tools/original_trust.py`, digest pin `da88460e…`/`d121ba89…` → bundle `7416ca4f…`, sama dengan di runner) | `gpu-addon-sha256.txt` artifact |
+| Rekonstruksi owner-trust lokal (`tools/owner_trust.py`) | **PASS**: CDHash plugin + daemon dihitung dari tanda tangannya sendiri = trust.json; ketiga Mach-O di dalam blob addon (plugin, Turnip bertanda tangan, daemon) tercakup modul owner; bundle hasil rekonstruksi = byte CI (`89bcf73f…` macos-15-intel, `c3c6b6c9…` macos-26-intel). Bundle tidak pernah diunggah (berisi modul Apple) | lokal |
+| Kompatibilitas userland 21H461 (`tools/dsc_import_check.py`) | **PASS**: setiap import two-level dylib Turnip (277/278), plugin (370/365) dan adrenoprobed (66/69) ada di library yang dirujuk dalam dyld shared cache 21H461; 0 hilang, 0 weak hilang. Kontrol negatif: kelas Metal iOS 18 (`MTLLogStateDescriptor`, `MTLResidencySetDescriptor`) memang tidak ada | lokal |
+| `A650GmuTests` | **PASS** di qemu-aarch64 10.2.1 user mode (gcc + clang, `-Werror`, statis), dengan firmware bawaan test dan dengan `a650_gmu.bin` perangkat (`df79fa84…`): 16 blok, versi 0x20010008, HFI siap | `scripts/a650-gmu-tests.sh` |
+| VerifiedRoot (host self-test) | **PASS** dengan kebijakan owner asli (2/2, semua manipulasi ditolak); anchor RSA lain: FAIL seperti seharusnya | `tests/pipa-verified-root-selftest-host.c` (port) |
+| Lima simbol backlight | Audit: definisi nyata (driver KTZ8866), bukan stub; `native_backlight_scale` = 256 = nilai fallback pemakai weak, jadi perilaku sama dengan pengikatan-ke-0 ld Apple. Catatan: `sheng_backlight_probe_result = -6` dipakai dua kali (vtable dan start), sama dengan versi yang diuji di tablet, tidak diubah | patch port 0007 |
+| Kernel tahap B | `81fa3170…` dipertahankan (v3-run1 = v3-run2). **Koreksi sesi 8**: link dan prelink PASS, tetapi `stage-b.log` berakhir `ERROR: a required archive input was skipped` (addon SKIP karena Turnip belum ada). Addon bukan input `kernel.macho`: ia masuk payload (`--gpu-addon` → `kernel.macho.gpuaddon`, ditulis kernel ke Data) | `repro-v3-run1/stage-b.log` |
+| Payload (kernel `81fa3170…` + addon + owner-trust) | **BLOCKED (bukan GPU)**: `unixnu build payload` menerima kernel, addon NGPUADD2 dan trust, lalu berhenti di ADT: "ADT handoff requires one contiguous DRAM range". `dts/pipa.dts` port `c4c1a3a` punya dua rentang (0x80000000+0x3bb00000, 0xc0000000+0x1c0000000; celah bootloader 0xbbb00000..0xc0000000), generator schema-2 UniXNU `62f203c` hanya menerima satu. Tidak ditambal: menggabungkan rentang berarti menebak peta memori | dry-run lokal |
+| Reproducibility Turnip | dylib berbeda antar-run dan antar-image (mis. macos-15-intel `2efec90d…` lalu `3440abab…`); bridge identik. Belum diselidiki | log CI |
+| Akselerasi GPU di tablet | **NOT TESTED**: tidak ada boot | — |
 
 ## Sesi 8 (lokal WSL2; push belum bisa: tidak ada kredensial GitHub di WSL maupun Windows)
 
@@ -21,7 +43,7 @@ Dua status terpisah, tidak pernah disamakan:
 | ShengHidInput recheck (kernel final) | **PASS**: teks asli, slot, ukuran instance, slot milik driver, 52 simbol HID asli tidak bergeser | `repro-v3-run2/recheck.log` |
 | Storage ABI pada kernel final | **TRANSFER PASS 12/12**; anchor dan kedua kebijakan dalam kernel = file owner byte-per-byte | `storage-transfer-final.json` |
 | Root iPadOS | `native-ufs-root-part=ipados`; `tools/storage_safety.py`: STORAGE OFFLINE PASS (default Android, timeout 10 s, entri recovery) | — |
-| Turnip iOS / bridge / GPU addon | **NOT BUILT** (butuh Xcode). Rute ABI diperbaiki dan job CI `macos-gpu` ditambahkan, keduanya belum dijalankan. Detail: [ADRENO650.md](ADRENO650.md) | — |
+| Turnip iOS / bridge / GPU addon | **NOT BUILT** di sesi 8 (butuh Xcode); dibangun di sesi 9 (di atas). Detail: [ADRENO650.md](ADRENO650.md) | — |
 | Host test port | Buttons, GpuPowerBoard, NativeBattery, TouchBoard: PASS (gcc + clang). `A650GmuTests`: build aarch64 PASS, NOT RUN (tanpa `qemu-user`) | `evidence/host-tests/` |
 | Akselerasi GPU di tablet | **NOT TESTED** | — |
 

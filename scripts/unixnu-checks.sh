@@ -11,7 +11,7 @@ for repo in "$P" "$R"; do
 	label=$(basename "$repo")
 	for t in "$repo"/package/*Tests.c; do
 		n=$(basename "$t" .c)
-		case $n in A650GmuTests) row "NOT RUN  $label $n: needs UniXNU kits/AdrenoFirmware (AdrenoHfiStartup.h) via unixnu fetch"; continue;; esac
+		case $n in A650GmuTests) row "SEPARATE $label $n: AArch64-only HFI kit, run by scripts/a650-gmu-tests.sh under qemu-aarch64"; continue;; esac
 		for cc in gcc clang; do
 			command -v $cc >/dev/null || continue
 			bin=$(mktemp)
