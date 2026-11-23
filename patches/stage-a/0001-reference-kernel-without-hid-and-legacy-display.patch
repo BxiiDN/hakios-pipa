@@ -1,8 +1,20 @@
 diff --git a/board.toml b/board.toml
-index 049a247..5c54e9c 100644
+index 049a247..6346479 100644
 --- a/board.toml
 +++ b/board.toml
-@@ -74,7 +74,7 @@ archives = [
+@@ -29,9 +29,10 @@ unixnu = "../UniXNU"
+ "ipados-17.7.11-21H461" = "pipa_defconfig"
+ 
+ [components]
++# stage A (hakios-pipa docs/BOOTSTRAP.md): ShengHidInput is not selected, so archive_plan does not require its entry
+ # Native platform mainline components aligned with UniXNU component catalog. QcomGeniSpi and ShengNovatekTouch are the pipa
+ # touch transport and protocol; the Wi-Fi/Bluetooth components stay listed but their boot arguments are default-off below.
+-include = ["XnuPrelink", "DarwinBoot", "ArmDTPlatform", "ArmCpu", "SoftwareAES", "RamBlock", "VirtioMmioBlock", "VerifiedRoot", "ShengUfs", "GopFramebuffer", "AppleKeyStoreState", "ShengHidInput", "AdrenoPM4", "AdrenoFirmware", "ArmSmmu4K", "AirNir", "Ath12kWifi", "QcaBluetooth", "QcomGeniSpi", "ShengNovatekTouch"]
++include = ["XnuPrelink", "DarwinBoot", "ArmDTPlatform", "ArmCpu", "SoftwareAES", "RamBlock", "VirtioMmioBlock", "VerifiedRoot", "ShengUfs", "GopFramebuffer", "AppleKeyStoreState", "AdrenoPM4", "AdrenoFirmware", "ArmSmmu4K", "AirNir", "Ath12kWifi", "QcaBluetooth", "QcomGeniSpi", "ShengNovatekTouch"]
+ 
+ [ipsw]
+ url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+@@ -74,7 +75,7 @@ archives = [
    "build-verified-root-key.py",
    "component:ShengUfs",
    "component:AppleKeyStoreState",
@@ -11,7 +23,7 @@ index 049a247..5c54e9c 100644
    "build-libpthread-kernel.py",
    "build-corecrypto-14.py",
    "build-corecrypto-14.py --namespace",
-@@ -83,7 +83,7 @@ archives = [
+@@ -83,7 +84,7 @@ archives = [
    "build-boot-progress.py",
    "build-adreno650.py",
    "build-pipa-gpu-addon.py",
