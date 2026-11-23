@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Check the private pipa firmware the legacy-display archive embeds, before a local stage-B build.
 
-  firmware_check.py DIR [--pins UniXNU-pipa/proprietary-files.txt] [--json OUT]
+  firmware_check.py DIR [--pins UniXNU-pipa/proprietary-files.txt] [--pins manifests/pipa-official-rom-*.txt] [--json OUT]
 
 DIR is a private directory outside Git (scripts/collect-firmware.sh fills it). For each input the check reports
 MISSING, FORMAT FAIL, PIN MISMATCH or PASS:
   - the format rules of build-gop-legacy-display.py, unchanged (GMU block image, SQE image, 32-bit ELF ZAP, Novatek
     image whose trailer passes the vendor driver's version check); the ZAP ELF machine is reported, not judged;
-  - the SHA-256 recorded for this unit in the port's proprietary-files.txt.
+  - the SHA-256 recorded for this unit in the port's proprietary-files.txt, or in another pin file given with a
+    further --pins (each records its own provenance, e.g. an official Xiaomi ROM); the matching file is reported.
+    A digest that matches no pin file is PIN MISMATCH, never PASS.
 A split PIL image (a650_zap.mdt + .b0N) is reported as such: the builder needs the single a650_zap.elf from the
 same /vendor/firmware, and renaming another file is never a substitute. Nothing is copied or printed but digests.
 """
@@ -53,11 +55,22 @@ def format_problems(name, blob):
     return ['unknown input']
 
 
+def merge_pins(*files):
+    """entry -> {sha256: [pin file names]} over several pin files"""
+    merged = {}
+    for f in files:
+        for entry, digest in pins_of(f).items():
+            merged.setdefault(entry, {}).setdefault(digest, []).append(Path(f).name)
+    return merged
+
+
 def check(directory, pins):
     directory, results = Path(directory), []
+    pins = {k: (v if isinstance(v, dict) else {v: []}) for k, v in pins.items()}
     for rel, entry in INPUTS.items():
         path = directory / rel
-        row = {'input': rel, 'pin': pins.get(entry)}
+        known = pins.get(entry, {})
+        row = {'input': rel, 'pin': sorted(known)[0] if len(known) == 1 else (sorted(known) or None)}
         if not path.is_file():
             row['verdict'] = 'MISSING'
             if rel.endswith('a650_zap.elf') and (directory / 'gpu/a650_zap.mdt').is_file():
@@ -70,12 +83,14 @@ def check(directory, pins):
             problems = format_problems(rel, blob)
             if problems:
                 row.update(verdict='FORMAT FAIL', problems=problems)
-            elif row['pin'] and row['pin'] != row['sha256']:
+            elif known and row['sha256'] not in known:
                 row['verdict'] = 'PIN MISMATCH'
-            elif not row['pin']:
+            elif not known:
                 row['verdict'] = 'NO PIN'
             else:
                 row['verdict'] = 'PASS'
+                if known[row['sha256']]:
+                    row['pin_source'] = known[row['sha256']]
         results.append(row)
     return results
 
@@ -83,13 +98,15 @@ def check(directory, pins):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('directory')
-    p.add_argument('--pins', default=None)
+    p.add_argument('--pins', action='append', default=[])
     p.add_argument('--json')
     args = p.parse_args(argv)
-    pins = pins_of(args.pins) if args.pins else {}
+    pins = merge_pins(*args.pins)
     results = check(args.directory, pins)
     for r in results:
         extra = r.get('note') or '; '.join(r.get('problems', [])) or (r.get('sha256', '')[:16] + '...' if r.get('sha256') else '')
+        if r.get('pin_source'):
+            extra += ' (' + ', '.join(r['pin_source']) + ')'
         print(f'{r["verdict"]:12} {r["input"]}  {extra}')
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=2) + '\n')

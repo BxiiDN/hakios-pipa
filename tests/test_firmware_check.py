@@ -87,3 +87,31 @@ class FirmwareCheck(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SeveralPinFiles(unittest.TestCase):
+    """A second pin file (an official ROM) adds a recorded digest; an unrecorded digest still fails."""
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        for rel, blob in GOOD.items():
+            (self.d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.d / rel).write_bytes(blob)
+        port, rom = self.d / 'proprietary-files.txt', self.d / 'pipa-official-rom-test.txt'
+        port.write_text(''.join(f'{e} | port | {(hashlib.sha256(GOOD[r]).hexdigest() if r != "gpu/a650_zap.elf" else "0" * 64)} | x\n'
+                                for r, e in fc.INPUTS.items()))
+        rom.write_text(f'firmware/a650_zap.elf | rom | {hashlib.sha256(GOOD["gpu/a650_zap.elf"]).hexdigest()} | x\n')
+        self.port, self.rom = port, rom
+
+    def test_port_pin_alone_mismatches(self):
+        r = {x['input']: x for x in fc.check(self.d, fc.merge_pins(self.port))}
+        self.assertEqual(r['gpu/a650_zap.elf']['verdict'], 'PIN MISMATCH')
+
+    def test_rom_pin_matches_and_is_named(self):
+        r = {x['input']: x for x in fc.check(self.d, fc.merge_pins(self.port, self.rom))}
+        self.assertEqual(r['gpu/a650_zap.elf']['verdict'], 'PASS')
+        self.assertEqual(r['gpu/a650_zap.elf']['pin_source'], ['pipa-official-rom-test.txt'])
+
+    def test_other_digest_still_fails(self):
+        (self.d / 'gpu/a650_zap.elf').write_bytes(zap(machine=183))
+        r = {x['input']: x for x in fc.check(self.d, fc.merge_pins(self.port, self.rom))}
+        self.assertEqual(r['gpu/a650_zap.elf']['verdict'], 'PIN MISMATCH')

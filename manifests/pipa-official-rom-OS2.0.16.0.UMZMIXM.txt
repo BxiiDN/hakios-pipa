@@ -1,0 +1,18 @@
+# Pins measured by hakios-pipa (session 7, 2026-11-23) from the official Xiaomi OTA
+# pipa_global-ota_full-OS2.0.16.0.UMZMIXM-user-14.0 (HyperOS 2.0.16, Android 14; zip md5 c378f929ad47ee581360b787670666ec).
+# Digests and provenance only; no firmware. Format as UniXNU-pipa proprietary-files.txt: path | source | SHA-256 | consumer
+#
+# vendor.img (EROFS, from the OTA payload.bin) sha256 9d3b204e5bc87832848124bf7aa965f5168a588c81a59dcc1afefb5bf403c335; boot.img sha256 2cad40b269f5758c062201cc4151d3dc37f9932b31ae8abbfe02d38ce8fe6a7b.
+# The ZAP images a650_zap.mdt/.b01/.elf differ from the port's pins, which were measured on a ColorOS port. These are
+# the official ROM's: a650_zap.elf is signed under "Xiaomi Root CA" / "Xiaomi Attestation CA", its three PT_LOAD
+# segments are byte-identical to a650_zap.b00/.b01/.b02 of the same /vendor/firmware, and it is the image the
+# UniXNU-pipa owner build used on this unit in Nov 2026. GMU and SQE are identical to the port's pins.
+# Touch: this unit's ABL reports msm_drm.dsi_display0=qcom,mdss_dsi_m82_42_02_0b_dual_dphy_video (maker 0x42 -> CSOT).
+firmware/a650_gmu.bin | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_gmu.bin | df79fa8482fcc7587bb239b9c9e2b24bce4729893b990fe3f82b30da8175b01c | Adreno 650
+firmware/a650_sqe.fw | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_sqe.fw | b4c27420fd6a5c6b511b254cc0fad8cdd40eea38ceb3418f895a1084f4460487 | Adreno 650
+firmware/a650_zap.mdt | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_zap.mdt | fa3382ee90f3461f9996009cc2735f1c6783e499cf3613111c39e11dcef255de | Adreno 650
+firmware/a650_zap.b00 | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_zap.b00 | ec9b9d5a67456384809624b14a00d15d36297e5f2e75728504cd872bc95e0947 | Adreno 650
+firmware/a650_zap.b01 | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_zap.b01 | 35f5e36147239aafca476d35aac611b0a48c84b521f7c2c72a20ba3f9a3aa940 | Adreno 650
+firmware/a650_zap.b02 | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_zap.b02 | a415e5452fa8f597670a6e51010e97bfabca7d20fbce8044caed64d9d5873113 | Adreno 650
+firmware/a650_zap.elf | official OTA OS2.0.16.0.UMZMIXM vendor.img /vendor/firmware/a650_zap.elf | dd930441fec777c656e73d78bc7e28fa4d42dadeeeba4c788c94936c96db0f19 | Adreno 650
+firmware/novatek_nt36532_m82_fw_csot.bin | official OTA OS2.0.16.0.UMZMIXM boot.img built-in firmware | ba7d0eb9b68a8a6bbbad487f9fb8103e2a142092fdcc4daea5514bb119aa4cdb | Novatek NT36532 touch (panel m82 42 02 0b)
