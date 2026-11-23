@@ -168,9 +168,7 @@ jobs:
           brew install bash coreutils llvm lld mtools dtc qemu nasm
           command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
           qemu-system-aarch64 --version | head -1
-      - name: Pinned UniXNU and hakios-pipa patches
-        env:
-          SKIP_UEFI_PIPA: '1'
+      - name: Pinned UniXNU, uefi-pipa (the panic screen font of the payload step) and hakios-pipa patches
         run: scripts/fetch-unixnu.sh
       - name: Mu_Basecore submodules (package build)
         run: |
@@ -180,6 +178,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HAKIOS_EVIDENCE: ${{ runner.temp }}/public/qemu-storage
+          # Run 45109556365: the payload step's panic screen needs Font.h of a Mu-Silicium tree (UniXNU-qemu README).
+          UNIXNU_UEFI: ${{ env.HAKIOS_WORK }}/uefi-pipa
         run: scripts/qemu-storage-abi.sh
       - name: The end of each build log (failure only)
         if: failure()
