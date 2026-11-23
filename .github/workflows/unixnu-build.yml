@@ -23,6 +23,8 @@ on:
       - scripts/lib.sh
       - tools/build_manifest.py
       - tools/candidate_provenance.py
+      - tools/macho_fingerprint.py
+      - tools/binary_diff.py
       - scripts/kernel-two-stage.sh
       - patches/stage-a/**
       - .github/workflows/unixnu-build.yml
@@ -60,7 +62,7 @@ jobs:
           python-version: "3.13"
       - name: Host tools
         run: |
-          brew install bash coreutils llvm lld mtools dtc
+          brew install bash coreutils llvm lld mtools dtc glslang
           command -v unifdef >/dev/null || { brew install unifdef; echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"; }
       - name: Toolchain report
         run: |
@@ -102,6 +104,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
         run: scripts/kernel-two-stage.sh a
+      - name: Storage ABI, static checks only (UniXNU audit-storage-interface.py on the stage-A kernel)
+        continue-on-error: true
+        env:
+          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
+        run: scripts/kernel-two-stage.sh storage-static
+      - name: GPU userland -- Turnip libvulkan_freedreno.dylib and the AdrenoMetal bridge (ARM64/iOS 17)
+        env:
+          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
+        run: scripts/kernel-two-stage.sh gpu-userland
       - name: Stage B -- the full board against the stage-A kernel (XNU, every archive, final link, prelink)
         id: stage_b
         env:
@@ -183,6 +194,26 @@ jobs:
         env:
           UNIXNU_UEFI: ${{ env.HAKIOS_WORK }}/uefi-pipa
         run: ./unixnu build firmware --uefi ../uefi-pipa
+      - name: UEFI reproducibility -- a second clean build in the same environment, compared byte by byte
+        # Session 4 bb3da32b... and session 5 6940dbff... from the same pins: find out what differs.
+        continue-on-error: true
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        env:
+          UNIXNU_UEFI: ${{ env.HAKIOS_WORK }}/uefi-pipa
+        run: |
+          fd=../uefi-pipa/Build/pipaPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd
+          mkdir -p "$RUNNER_TEMP/repro" "$RUNNER_TEMP/public"
+          cp "$fd" "$RUNNER_TEMP/repro/first.fd"
+          ( cd ../uefi-pipa/Build/pipaPkg && find . -name '*.efi' -type f | sort | xargs shasum -a 256 ) > "$RUNNER_TEMP/repro/first-efi.txt"
+          rm -rf ../uefi-pipa/Build
+          ./unixnu build firmware --uefi ../uefi-pipa > "$RUNNER_TEMP/repro/second-build.log" 2>&1 || { tail -40 "$RUNNER_TEMP/repro/second-build.log"; exit 1; }
+          cp "$fd" "$RUNNER_TEMP/repro/second.fd"
+          ( cd ../uefi-pipa/Build/pipaPkg && find . -name '*.efi' -type f | sort | xargs shasum -a 256 ) > "$RUNNER_TEMP/repro/second-efi.txt"
+          shasum -a 256 "$RUNNER_TEMP"/repro/*.fd
+          echo "== .efi files that differ between the two builds"
+          diff "$RUNNER_TEMP/repro/first-efi.txt" "$RUNNER_TEMP/repro/second-efi.txt" | grep '^[<>]' | head -40 || true
+          python3 "$GITHUB_WORKSPACE/tools/binary_diff.py" "$RUNNER_TEMP/repro/first.fd" "$RUNNER_TEMP/repro/second.fd" \
+            --json "$RUNNER_TEMP/public/uefi-repro-diff.json"
       - name: The end of each build log (failure only)
         if: failure()
         run: |
