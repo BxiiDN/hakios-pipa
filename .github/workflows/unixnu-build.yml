@@ -134,7 +134,7 @@ jobs:
           retention-days: 14
       - name: Remove proprietary inputs
         if: always()
-        run: rm -rf "$HAKIOS_WORK/UniXNU/out/ipsw" "$HAKIOS_WORK"/UniXNU/out/*/kernel "$HAKIOS_WORK/UniXNU/out/feeds"
+        run: rm -rf "$HAKIOS_WORK/UniXNU/out/ipsw" "$HAKIOS_WORK"/UniXNU/out/*/kernel "$HAKIOS_WORK/UniXNU/out/feeds" "$HAKIOS_WORK/UniXNU-pipa/.cache/firmware" "$HAKIOS_WORK"/UniXNU/out/*/*/*/stage-a
 
   macos-firmware:
     runs-on: macos-26

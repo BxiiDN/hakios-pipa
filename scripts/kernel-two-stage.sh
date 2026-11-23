@@ -55,6 +55,13 @@ a)
 	;;
 b)
 	git -C "$P" apply --check -R "$STAGE_PATCH" 2>/dev/null && die "the stage-A patch is still applied to the port"
+	# build-platform-power.py (with a reference kernel) reads the original kernelcache at the port's path
+	# .cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed; UniXNU 62f203c keeps it in out/ipsw/<build>.
+	cache=$U/out/ipsw/21H461/kernelcache.decompressed
+	[ -f "$cache" ] || die "no decompressed 21H461 kernelcache at $cache"
+	[ "$(sha "$cache")" = f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7 ] || die "$cache is not the pinned 21H461 kernelcache"
+	mkdir -p "$P/.cache/firmware/kernelcache.macho"
+	ln -sfn "$cache" "$P/.cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed"
 	python3 "$ROOT/tools/candidate_provenance.py" install --candidate "$OUTDIR/stage-a/kernel.macho" \
 		--plan "$OUTDIR/stage-a/kernel.json" --provenance "$EV/stage-a-provenance.json" --tree "$TREE"
 	build stage-b
