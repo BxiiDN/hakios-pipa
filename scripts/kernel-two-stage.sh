@@ -212,6 +212,7 @@ PY
 	echo "UNIXNU_GPU_WORK=$TREE" > "$EV/gpu-userland.env"
 	;;
 gpu-addon)
+	command -v glslc >/dev/null || die "gpu-addon: glslc missing (brew install shaderc): gen-turnip-smoke-shaders.py needs it"
 	[ -f "$TREE/build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib" ] || die "gpu-addon: run gpu-userland first (no Turnip in $TREE)"
 	[ -f "$TREE/build/adreno-metal-bridge/ios/libadreno_metal_bridge.a" ] || die "gpu-addon: run gpu-userland first (no bridge in $TREE)"
 	# The two original trust modules (static + Cryptex1 System), read from the IPSW members only; nothing else of it.

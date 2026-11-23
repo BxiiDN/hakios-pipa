@@ -175,7 +175,7 @@ jobs:
           python-version: "3.13"
       - name: Host tools
         run: |
-          brew install bash coreutils llvm glslang bison flex
+          brew install bash coreutils llvm glslang shaderc bison flex   # shaderc: glslc for gen-turnip-smoke-shaders.py (run 45265530724)
           sw_vers; xcodebuild -version; xcrun --sdk iphoneos --show-sdk-version
       - name: Pinned UniXNU, UniXNU-pipa and hakios-pipa patches
         env:
