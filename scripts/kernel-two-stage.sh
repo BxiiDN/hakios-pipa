@@ -15,7 +15,8 @@
 source "$(dirname "$0")/lib.sh"
 stage=${1:?usage: kernel-two-stage.sh a|b|recheck}
 U=$WORK/UniXNU P=$WORK/UniXNU-pipa
-OUTDIR=$U/out/pipa/ipados-17.7.11-21H461/pipa
+OUTROOT=${UNIXNU_OUT:-$U/out}   # UniXNU honours UNIXNU_OUT too: a fresh one is a clean build
+OUTDIR=$OUTROOT/pipa/ipados-17.7.11-21H461/pipa
 TREE=$OUTDIR/tree KERNEL=$OUTDIR/kernel/kernel.macho
 EV=${HAKIOS_EVIDENCE:-$ROOT/logs/two-stage}
 STAGE_PATCH=$ROOT/patches/stage-a/0001-reference-kernel-without-hid-and-legacy-display.patch
@@ -67,7 +68,7 @@ skipped() {  # skipped NAME: list builder SKIP lines; true when there is one
 }
 
 turnip_diagnostics() {  # evidence for a failed Turnip iOS compile: first errors, feature macros, SDK headers
-	local b=$U/build/mesa-tu-ios sdk d=$EV/turnip-diagnostics.txt
+	local b=$TREE/build/mesa-tu-ios sdk d=$EV/turnip-diagnostics.txt
 	sdk=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
 	{ echo "== SDK $(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null) $sdk"
 	  for h in endian.h machine/endian.h dlfcn.h; do echo "-- $h: $([ -f "$sdk/usr/include/$h" ] && shasum -a 256 "$sdk/usr/include/$h" | cut -c1-16 || echo absent)"; done
@@ -75,8 +76,8 @@ turnip_diagnostics() {  # evidence for a failed Turnip iOS compile: first errors
 	  grep -nE 'Dl_info|dladdr|_POSIX_C_SOURCE|_DARWIN_C_SOURCE|__DARWIN_C_LEVEL' "$sdk/usr/include/dlfcn.h" 2>/dev/null | head -20
 	  echo "== HAVE_* in build.ninja"; grep -oE -- '-DHAVE_[A-Z0-9_]+' "$b/build.ninja" 2>/dev/null | sort | uniq -c
 	  echo "== meson header/function checks"; grep -E 'Has header "(endian|dlfcn)\.h"|Checking for function "dladdr"|Checking if .*endian' "$b/meson-logs/meson-log.txt" 2>/dev/null | head
-	  echo "== first compile errors"; grep -hE 'error:|FAILED:' "$U/.cache/mesa-tu-ios-build.log" "$EV/gpu-userland.log" 2>/dev/null | head -30
-	  echo "== first failing command"; grep -h -A1 '^FAILED:' "$U/.cache/mesa-tu-ios-build.log" 2>/dev/null | head -4 | cut -c1-1500
+	  echo "== first compile errors"; grep -hE 'error:|FAILED:' "$TREE/.cache/mesa-tu-ios-build.log" "$EV/gpu-userland.log" 2>/dev/null | head -30
+	  echo "== first failing command"; grep -h -A1 '^FAILED:' "$TREE/.cache/mesa-tu-ios-build.log" 2>/dev/null | head -4 | cut -c1-1500
 	} > "$d" 2>&1 || true
 	cat "$d"
 	# Annotations are readable on the public run page and API without a login: one per section, newlines as %0A.
@@ -112,7 +113,7 @@ b)
 	if [ -f "$EV/gpu-userland.env" ]; then export "$(cat "$EV/gpu-userland.env")"; say "GPU userland from $UNIXNU_GPU_WORK"; fi
 	# build-platform-power.py (with a reference kernel) reads the original kernelcache at the port's path
 	# .cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed; UniXNU 62f203c keeps it in out/ipsw/<build>.
-	cache=$U/out/ipsw/21H461/kernelcache.decompressed
+	cache=$OUTROOT/ipsw/21H461/kernelcache.decompressed
 	[ -f "$cache" ] || die "no decompressed 21H461 kernelcache at $cache"
 	[ "$(sha "$cache")" = f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7 ] || die "$cache is not the pinned 21H461 kernelcache"
 	mkdir -p "$P/.cache/firmware/kernelcache.macho"
@@ -140,22 +141,55 @@ gpu-userland)
 	command -v glslangValidator >/dev/null || die "glslangValidator missing (brew install glslang)"
 	# Mesa's ir3 parser needs bison >= 3 and flex; macOS ships bison 2.3 (run 45106011890: ir3_parser.c FAILED)
 	command -v brew >/dev/null && export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
-	say "bison: $(bison --version | head -1); flex: $(flex --version | head -1)"
-	(cd "$U" && python3 - <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location('boot_runtime', 'scripts/build-boot-runtime.py')
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-print('AdrenoMetal plugin:', module.build_plugin('ios'))
+	say "bison: $(bison --version | head -1); flex: $(flex --version | head -1); SDK $(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null)"
+	# In the pipa tree, as the GPU addon builder expects (its inputs are $TREE/build/...), not in UniXNU's own checkout:
+	# there drivers/Adreno740 is UniXNU's KMD and drivers/AdrenoMetal UniXNU's frontend, not the ones the pipa kernel has.
+	(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa && ./unixnu tree -D ../UniXNU-pipa) > "$EV/gpu-tree.log" 2>&1 || { tail -20 "$EV/gpu-tree.log"; die "gpu-userland: unixnu tree failed"; }
+	[ -d "$TREE/scripts" ] || die "gpu-userland: no pipa tree at $TREE"
+	# Turnip reads the KMD user-client ABI from -Dtu-darwin-abi-dir=drivers/Adreno740. pipa's KMD is drivers/Adreno650,
+	# whose NativeAdrenoABI.h has every constant of the 740 header with the same values (plus MaxQueues, MaxBoBytesShift):
+	# build against the ABI of the KMD that runs.
+	if [ -e "$TREE/drivers/Adreno740" ] && [ "$(readlink -f "$TREE/drivers/Adreno740")" != "$(readlink -f "$P/drivers/Adreno650")" ]; then
+		die "gpu-userland: $TREE/drivers/Adreno740 exists and is not pipa's Adreno650"
+	fi
+	ln -sfn "$P/drivers/Adreno650" "$TREE/drivers/Adreno740"
+	[ -f "$TREE/drivers/Adreno740/NativeAdrenoABI.h" ] || die "gpu-userland: no NativeAdrenoABI.h"
+	[ "$(readlink -f "$TREE/drivers/AdrenoMetal")" = "$(readlink -f "$P/drivers/AdrenoMetal")" ] || die "gpu-userland: the tree's AdrenoMetal is not pipa's"
+	mkdir -p "$TREE/.cache/mesa-tools/bin"; ln -sfn "$(command -v bison)" "$TREE/.cache/mesa-tools/bin/bison"
+	(cd "$TREE" && python3 - <<'PY'
+import importlib.util, json, sys
+from pathlib import Path
+sys.path.insert(0, 'scripts')
+spec = importlib.util.spec_from_file_location('boot_runtime', Path('scripts/build-boot-runtime.py'))
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+pins = json.loads(Path('scripts/data/adreno-compiler-inputs.json').read_text())
+mesa = m.ROOT / '.cache/mesa-work'
+if m.checkout(mesa, pins['mesa']):
+    for patch in pins['patches']:
+        m.run('git', '-C', mesa, 'apply', m.ROOT / patch)
+m.validate_recorded_patches(m.ROOT, mesa, pins)
+venv = m.ROOT / '.cache/mesa-venv'
+if not (venv / 'bin/python').is_file():
+    m.run(sys.executable, '-m', 'venv', venv)
+m.run(venv / 'bin/python', '-m', 'pip', 'install', '-r', m.ROOT / 'scripts/requirements-adreno-compiler.txt')
+m.script('build-turnip-darwin.py', '--target', 'ios')
 PY
-	) > "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; tail -60 "$U/.cache/mesa-tu-ios-build.log" 2>/dev/null; turnip_diagnostics; die "gpu-userland: Turnip/AdrenoMetal build failed"; }
+	) > "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; tail -60 "$TREE/.cache/mesa-tu-ios-build.log" 2>/dev/null; turnip_diagnostics; die "gpu-userland: Turnip build failed"; }
+	# The bridge: pipa's drivers/AdrenoMetal/bridge on its own translator pin (scripts/build-adreno-metal-bridge.py, port
+	# patch 0009: its 21 patches apply to metal2vulkan 720ef1ce and to no later pin).
+	m2v=$TREE/.cache/gpu-reference/metal2vulkan
+	[ -d "$m2v/.git" ] || git clone -q --filter=blob:none https://github.com/steelbrain/metal2vulkan.git "$m2v"
+	git -C "$m2v" checkout -q --detach 720ef1ce9ae2a2068999a8675717418b9416283e
+	command -v brew >/dev/null && export LLVM_AS="$(brew --prefix llvm)/bin/llvm-as"
+	(cd "$TREE" && python3 scripts/build-adreno-metal-bridge.py --target ios) >> "$EV/gpu-userland.log" 2>&1 || { tail -40 "$EV/gpu-userland.log"; die "gpu-userland: Metal bridge build failed"; }
 	tail -20 "$EV/gpu-userland.log"
 	for f in build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib build/adreno-metal-bridge/ios/libadreno_metal_bridge.a; do
-		[ -f "$U/$f" ] || die "gpu-userland: $f was not produced"
-		say "gpu-userland: $(sha "$U/$f")  $(wc -c < "$U/$f" | tr -d ' ')  $f"
-		file "$U/$f" | sed 's/^/  /'
+		[ -f "$TREE/$f" ] || die "gpu-userland: $f was not produced"
+		say "gpu-userland: $(sha "$TREE/$f")  $(wc -c < "$TREE/$f" | tr -d ' ')  $f"
+		file "$TREE/$f" | sed 's/^/  /'
 	done
-	echo "UNIXNU_GPU_WORK=$U" > "$EV/gpu-userland.env"
+	echo "UNIXNU_GPU_WORK=$TREE" > "$EV/gpu-userland.env"
 	;;
 storage-static)
 	[ -f "$OUTDIR/stage-a/kernel.macho" ] || die "no stage-A kernel; run stage a first"

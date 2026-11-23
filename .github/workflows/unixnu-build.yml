@@ -149,6 +149,65 @@ jobs:
         if: always()
         run: rm -rf "$HAKIOS_WORK/UniXNU/out/ipsw" "$HAKIOS_WORK"/UniXNU/out/*/kernel "$HAKIOS_WORK/UniXNU/out/feeds" "$HAKIOS_WORK/UniXNU-pipa/.cache/firmware" "$HAKIOS_WORK"/UniXNU/out/*/*/*/stage-a
 
+  macos-gpu:
+    # Turnip (libvulkan_freedreno.dylib) and pipa's Metal bridge for ARM64/iOS 17, the pipa way (kernel-two-stage.sh
+    # gpu-userland: in the pipa tree, against pipa's Adreno650 KMD ABI and its own translator pin). Two images: the
+    # pipa GPU addon was last built on macos-15 (Xcode 16) with this Mesa pin; macos-26 (Xcode 26.6) failed with
+    # RG88/GR88 and Dl_info (run 45107232121). Uploads only what is compiled from open source (the dylib, the bridge
+    # archive) with SHA-256s and the diagnostics; nothing from the IPSW.
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [macos-15, macos-26]
+    runs-on: ${{ matrix.image }}
+    timeout-minutes: 240
+    env:
+      HAKIOS_WORK: ${{ github.workspace }}/../work
+      HAKIOS_EVIDENCE: ${{ github.workspace }}/../public/gpu
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Host tools
+        run: |
+          brew install bash coreutils llvm glslang bison flex
+          sw_vers; xcodebuild -version; xcrun --sdk iphoneos --show-sdk-version
+      - name: Pinned UniXNU, UniXNU-pipa and hakios-pipa patches
+        env:
+          SKIP_UEFI_PIPA: '1'
+        run: scripts/fetch-unixnu.sh
+      - name: Defconfig and fetch
+        working-directory: ${{ env.HAKIOS_WORK }}/UniXNU
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
+          ./unixnu fetch
+      - name: Turnip and the Metal bridge (gpu-userland)
+        run: |
+          mkdir -p "$RUNNER_TEMP/owner"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$RUNNER_TEMP/owner/e.pem"
+          openssl pkey -in "$RUNNER_TEMP/owner/e.pem" -pubout -out "$RUNNER_TEMP/owner/owner-public.pem"; rm -f "$RUNNER_TEMP/owner/e.pem"
+          export UNIXNU_OWNER_PUBLIC_KEY="$RUNNER_TEMP/owner/owner-public.pem" UNIXNU_OWNER_KEY_KIND=ephemeral UNIXNU_OWNER_KEY_SHA256=unused
+          scripts/kernel-two-stage.sh gpu-userland
+      - name: Outputs
+        if: always()
+        run: |
+          T="$HAKIOS_WORK/UniXNU/out/pipa/ipados-17.7.11-21H461/pipa/tree"
+          mkdir -p "$HAKIOS_EVIDENCE/bin"
+          for f in build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib build/adreno-metal-bridge/ios/libadreno_metal_bridge.a; do
+            [ -f "$T/$f" ] && cp "$T/$f" "$HAKIOS_EVIDENCE/bin/" || true
+          done
+          cp "$T/.cache/mesa-tu-ios-build.log" "$T/.cache/mesa-tu-ios-configure.log" "$HAKIOS_EVIDENCE/" 2>/dev/null || true
+          (cd "$HAKIOS_EVIDENCE/bin" && shasum -a 256 * 2>/dev/null | tee SHA256SUMS) || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-userland-${{ matrix.image }}
+          path: ${{ github.workspace }}/../public/gpu
+          retention-days: 14
+
   macos-qemu-storage:
     # Storage ABI, LIVE (docs/BOOTSTRAP.md): the QEMU virt board of the same IPSW, booted under QEMU TCG and observed
     # with UniXNU's gdb-stop.py; its interface-audit.json is what VirtioMmioBlock/RamBlock bind against. QEMU, not the
