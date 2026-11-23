@@ -144,8 +144,20 @@ gpu-userland)
 	say "bison: $(bison --version | head -1); flex: $(flex --version | head -1); SDK $(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null)"
 	# In the pipa tree, as the GPU addon builder expects (its inputs are $TREE/build/...), not in UniXNU's own checkout:
 	# there drivers/Adreno740 is UniXNU's KMD and drivers/AdrenoMetal UniXNU's frontend, not the ones the pipa kernel has.
-	(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa && ./unixnu tree -D ../UniXNU-pipa) > "$EV/gpu-tree.log" 2>&1 || { tail -20 "$EV/gpu-tree.log"; die "gpu-userland: unixnu tree failed"; }
+	# `unixnu tree` fetches every git module; run 45260103800 lost one to "Connection reset by peer": three attempts.
+	for attempt in 1 2 3; do
+		(cd "$U" && ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa && ./unixnu tree -D ../UniXNU-pipa) > "$EV/gpu-tree.log" 2>&1 && break
+		[ $attempt = 3 ] && { tail -20 "$EV/gpu-tree.log"; die "gpu-userland: unixnu tree failed"; }
+		say "gpu-userland: unixnu tree attempt $attempt failed: $(grep -m1 -E 'fatal|error' "$EV/gpu-tree.log")"; sleep 30
+	done
 	[ -d "$TREE/scripts" ] || die "gpu-userland: no pipa tree at $TREE"
+	# `unixnu tree` links only the board's components: drivers/Adreno650 and drivers/AdrenoMetal are not among them (a
+	# fresh tree has neither). pipa's own builders link them from the device repository (build-adreno650.py,
+	# build-pipa-gpu-addon.py stage_inputs); do the same here, and refuse a tree whose links point elsewhere.
+	for d in Adreno650 AdrenoMetal; do
+		[ -d "$P/drivers/$d" ] || die "gpu-userland: the pipa port has no drivers/$d"
+		[ -e "$TREE/drivers/$d" ] || [ -L "$TREE/drivers/$d" ] || ln -s "$(cd "$P/drivers/$d" && pwd -P)" "$TREE/drivers/$d"
+	done
 	# Turnip reads the KMD user-client ABI from -Dtu-darwin-abi-dir=drivers/Adreno740. pipa's KMD is drivers/Adreno650,
 	# whose NativeAdrenoABI.h has every constant of the 740 header with the same values (plus MaxQueues, MaxBoBytesShift):
 	# build against the ABI of the KMD that runs.

@@ -166,7 +166,8 @@ jobs:
     timeout-minutes: 240
     env:
       HAKIOS_WORK: ${{ github.workspace }}/../work
-      HAKIOS_EVIDENCE: ${{ github.workspace }}/../public/gpu
+      # upload-artifact refuses '..' in a path (run 45260103800): evidence inside the workspace (runner.temp is not a job-level env context)
+      HAKIOS_EVIDENCE: ${{ github.workspace }}/public-gpu
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -186,7 +187,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
-          ./unixnu fetch
+          for i in 1 2 3; do ./unixnu fetch && break; [ $i = 3 ] && exit 1; echo "fetch attempt $i failed"; sleep 30; done
       - name: Turnip and the Metal bridge (gpu-userland)
         run: |
           mkdir -p "$RUNNER_TEMP/owner"
@@ -208,7 +209,7 @@ jobs:
         if: always()
         with:
           name: gpu-userland-${{ matrix.image }}
-          path: ${{ github.workspace }}/../public/gpu
+          path: ${{ github.workspace }}/public-gpu
           retention-days: 14
 
   macos-qemu-storage:
