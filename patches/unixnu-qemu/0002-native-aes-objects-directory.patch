@@ -1,0 +1,27 @@
+diff --git a/board.toml b/board.toml
+index e60b2cd..39ac2cd 100644
+--- a/board.toml
++++ b/board.toml
+@@ -34,7 +34,9 @@ archives = [
+   "build-arm-driver.py ArmDTPlatform",
+   "build-arm-driver.py ArmCpu",
+   "build-arm-driver.py NativeAES",
+-  "build-native-aes-bindings.py",
++  # hakios-pipa: this board's build-arm-driver.py writes NativeAES.o to build/native-aes; UniXNU 62f203c's binder
++  # (the alias target of build-native-aes-bindings.py) defaults to build/software-aes.
++  "build-software-aes-bindings.py --objects-dir build/native-aes",
+   "build-libpthread-kernel.py",
+   "build-mockfs-fixture.py",
+   "build-link-stubs.py",
+diff --git a/configs/qemu_defconfig b/configs/qemu_defconfig
+index 6c8e236..855c995 100644
+--- a/configs/qemu_defconfig
++++ b/configs/qemu_defconfig
+@@ -18,6 +18,7 @@ CONFIG_XNU_SOURCE_PTHREAD=y
+ CONFIG_XNU_ARM_DT_PLATFORM=y
+ CONFIG_XNU_ARMCPU=y
+ CONFIG_XNU_NATIVE_AES=y
++CONFIG_XNU_NATIVE_AES_ARCHIVE="{tree}/build/native-aes/libSoftwareAES.a"
+ CONFIG_XNU_TRUST_CACHE_RUNTIME=y
+ CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
+ CONFIG_XNU_DT_PANIC_REGION=y
