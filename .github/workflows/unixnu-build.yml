@@ -185,6 +185,10 @@ jobs:
     runs-on: ${{ matrix.image }}
     timeout-minutes: 240
     env:
+      # Mesa's generators are Python: with a random hash seed their set/dict order (and so the order of the generated tables,
+      # objects and strings) changes per run. Runs 45265530724 / 45271686452 (macos-15-intel): same size, same 18 420
+      # strings in a different order, 6.4 MB of differing bytes. Fixed here as in macos-firmware.
+      PYTHONHASHSEED: '0'
       HAKIOS_WORK: ${{ github.workspace }}/../work
       # upload-artifact refuses '..' in a path (run 45260103800): evidence inside the workspace (runner.temp is not a job-level env context)
       HAKIOS_EVIDENCE: ${{ github.workspace }}/public-gpu
@@ -236,6 +240,31 @@ jobs:
         with:
           name: gpu-userland-${{ matrix.image }}
           path: ${{ github.workspace }}/public-gpu
+          retention-days: 14
+      - name: Turnip reproducibility -- a second clean build at the same path, same environment, compared
+        continue-on-error: true
+        run: |
+          T="$HAKIOS_WORK/UniXNU/out/pipa/ipados-17.7.11-21H461/pipa/tree"; d=build/mesa-tu-ios
+          f=src/freedreno/vulkan/libvulkan_freedreno.dylib; R="$GITHUB_WORKSPACE/turnip-repro"; mkdir -p "$R"
+          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$PATH"
+          mv "$T/$d" "$T/$d.first"   # moved, not deleted: the second build gets the same path
+          (cd "$T" && python3 scripts/build-turnip-darwin.py --target ios) > "$R/second-build.log" 2>&1 || { tail -40 "$R/second-build.log"; exit 1; }
+          a=$(shasum -a 256 "$T/$d.first/$f" | cut -d' ' -f1); b=$(shasum -a 256 "$T/$d/$f" | cut -d' ' -f1)
+          { echo "first  $a"; echo "second $b"; echo "PYTHONHASHSEED=$PYTHONHASHSEED"
+            for x in "$T/$d.first/$f" "$T/$d/$f"; do xcrun dwarfdump --uuid "$x" 2>/dev/null || true; done
+            [ "$a" = "$b" ] && echo "TURNIP REPRODUCIBLE" || echo "TURNIP DIFFERS"
+            echo "== objects that differ (first 40)"
+            (cd "$T/$d.first" && find . -name '*.o' -type f | sort) | while read -r o; do
+              cmp -s "$T/$d.first/$o" "$T/$d/$o" || echo "$o"; done | head -40
+            echo "== generated sources that differ (first 40)"
+            (cd "$T/$d.first" && find . \( -name '*.c' -o -name '*.h' -o -name '*.cpp' \) -type f | sort) | while read -r g; do
+              cmp -s "$T/$d.first/$g" "$T/$d/$g" || echo "$g"; done | head -40
+          } | tee "$R/report.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turnip-repro-${{ matrix.image }}
+          path: ${{ github.workspace }}/turnip-repro
           retention-days: 14
 
   macos-qemu-storage:
