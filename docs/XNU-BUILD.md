@@ -1,7 +1,9 @@
 # Build XNU 10063 (UniXNU) untuk pipa: status dan dependency
 
-**Status (sesi 4): FAIL di tahap archive driver ke-8 (`ShengHidInput`).** Kernel XNU 10063.141.1 sudah dikompilasi
-di CI (bootstrap pass). Kernel final belum di-link dan belum di-prelink. Belum ada `kernel.macho`.
+**Status (sesi 5): kernel referensi tahap A berhasil di-link dan di-prelink, tetapi tahap A bukan image boot.**
+Kernel board lengkap (tahap B) gagal di langkah archive ke-20 dari 21 (`build-gop-legacy-display.py`, firmware
+perangkat). Setelah itu masih ada blocker kualifikasi storage. Jadi belum ada `kernel.macho` board lengkap, dan
+link final maupun prelink board lengkap belum terjadi. Detail di [BOOTSTRAP.md](BOOTSTRAP.md).
 
 Host build: GitHub Actions `macos-26`, Xcode 26.6 (Apple clang 21.0.0), SDK iphoneos 26.5. Jalurnya sama dengan
 `.github/workflows/macos.yml` milik UniXNU sendiri. Workflow: `.github/workflows/unixnu-build.yml`.
@@ -20,14 +22,14 @@ Host build: GitHub Actions `macos-26`, Xcode 26.6 (Apple clang 21.0.0), SDK ipho
 diperkirakan. Pass itu hanya menghasilkan compile record, dan simbol-simbol tersebut berasal dari archive driver
 yang dibangun sesudahnya.
 
-## Blocker berikutnya: kandidat referensi HID
+## Kandidat referensi HID (diselesaikan sesi 5 dengan bootstrap dua tahap)
 
 `build-sheng-hid-input.py` milik port memeriksa ABI `IOHIDDevice` asli terhadap kernel yang **sudah di-prelink**
 (`build/xnu-prelink/native-owner-ufs-cpu-desktop-*-candidate.macho` beserta plan `.json`-nya). Builder ini juga
 mengambil alamat binding dari kandidat tersebut. Kandidat itu artefak dari build lokal penulis port dan tidak ada di
 repositori. Berarti diperlukan bootstrap dua tahap: prelink sekali tanpa `ShengHidInput` untuk membuat kandidat,
 lalu build ulang dengan HID. Tahap 2 tidak boleh memakai alamat binding dari tahap 1 tanpa diverifikasi ulang,
-karena layout kernel native bisa berubah. Belum dikerjakan.
+karena layout kernel native bisa berubah. Dikerjakan di sesi 5: ShengHidInput PASS terhadap kandidat tahap A (run 45099835381, 45100879621).
 
 ## Toolchain Linux
 

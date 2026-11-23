@@ -25,9 +25,18 @@ yang sama dan slide yang sama. Setelah kernel akhir jadi, binding tetap dicek ul
 
 ## Tahapan (`scripts/kernel-two-stage.sh`, job `macos-kernel`)
 
-1. **Tahap A** menerapkan `patches/stage-a/0001` ke port. Patch ini menghapus dua baris archive
-   (`component:ShengHidInput`, `build-gop-legacy-display.py`) dan mengubah `CONFIG_XNU_NATIVE_LEGACY_DISPLAY` menjadi `n`.
-   Setelah itu `./unixnu build kernel` membangun XNU, archive lain, link final, dan prelink.
+1. **Tahap A** menerapkan `patches/stage-a/0001` ke port. Patch ini tidak menambah apa pun; isinya hanya mematikan:
+   - dua baris archive (`component:ShengHidInput` dan `build-gop-legacy-display.py`) beserta pilihan komponen
+     ShengHidInput;
+   - CONFIG berikut, diubah ke `n`: `NATIVE_LEGACY_DISPLAY`, `NATIVE_ADRENO`, `NATIVE_UFS`, `BOOT_PROGRESS(_STANDALONE)`,
+     `NATIVE_RAM_BLOCK`, `NATIVE_VIRTIO_BLOCK`, `VERIFIED_ROOT_PROBE`, dan seluruh `OWNER_*`.
+
+   Archive-nya tetap dibangun, hanya tidak di-link. Alasan tiap pemotongan, dengan bukti CI:
+   - Run 45096983204: komponen yang dipilih wajib punya entri archive, jadi ShengHidInput harus dicabut dari pilihan.
+   - Run 45097715798: `bindings.json` VirtioMmioBlock/RamBlock tidak ada. Penjelasannya di "Blocker storage" di bawah.
+   - Run 45099062345: Adreno mengimpor `native_gop_handoff_call/_memory` dari archive display.
+
+   Setelah itu `./unixnu build kernel` membangun XNU, archive, link final, dan prelink.
    `tools/candidate_provenance.py record` lalu menolak kandidat yang bukan output prelinker. Yang diperiksa:
    sha256 kandidat = `candidate_sha256` di plan, `images_modified=false`, hash IOHIDFamily asli, extent
    IOHIDFamily `__TEXT_EXEC`, Mach-O arm64, `__TEXT` sejajar 16 KiB, dan ekspor wajib.
@@ -51,3 +60,32 @@ plan, provenance, daftar ekspor, hash, dan log.
 Test: `tests/test_candidate_provenance.py`, dengan kasus negatif untuk hash salah, file diubah setelah prelink,
 arsitektur salah, layout `__TEXT` tidak sejajar, simbol hilang, IOHIDFamily lain, `images_modified`, provenance
 kernel lain, input hilang, binding bergeser, binding hilang, layout berbeda, dan recheck terhadap referensi yang sama.
+
+## Hasil (sesi 5)
+
+| Run | Hasil |
+| --- | --- |
+| 45099835381 | **Tahap A PASS**: 18 archive, link final, prelink. `kernel.macho` `510999e4…` (51 974 144 B, 22 611 simbol ekspor), provenance PASS. Tahap B: **ShengHidInput PASS** terhadap kandidat ini ("original HID instruction identity, base imports, call boundaries and exact owned vtable"), lalu PMGR gagal karena path kernelcache |
+| 45100879621 | Tahap A PASS lagi (`9a2eec5b…`, ukuran sama). Tahap B: 20 dari 21 langkah archive PASS, termasuk HID, jembatan PMGR asli ("unchanged AMFI read/OR/write and original PMGR provider dispatch", 254 528 B; tahap A hanya no-op 576 B), boot progress, Adreno 650 (31 objek), GPU addon, dan audit ABI display legacy ("358 slots with nine abstract leaves"). Berhenti di `build-gop-legacy-display.py`: **firmware GMU `a650_gmu.bin` tidak ada** |
+
+Hash archive per tahap ada di log job (`stage-a-archives-sha256`, `stage-b-archives-sha256`) dan di artefak
+`kernel-logs-and-manifest`. Archive identik antar-run, tetapi `kernel.macho` tahap A tidak: dua run menghasilkan dua
+sha256 berbeda dengan ukuran sama. Penyebabnya belum diperiksa. Dugaan saya string versi/tanggal build XNU, tetapi
+ini belum dibuktikan.
+
+## Blocker tahap B
+
+1. **Firmware perangkat untuk archive display legacy.** Yang dibutuhkan: `a650_gmu.bin`, `a650_sqe.fw`,
+   `a650_zap.elf` (bertanda tangan pipa) dan `novatek_nt36532_m82_fw_csot.bin` (dari kernel stock).
+   Semuanya proprietary dan tidak boleh masuk GitHub atau CI publik. Sumbernya
+   `scripts/extract-pipa-firmware.py` milik port, yang hanya membaca `/vendor` lewat adb, lalu disimpan di
+   `UniXNU-pipa/.cache/firmware` (atau diberikan lewat `PIPA_*_FIRMWARE`) di mesin pemilik.
+2. **Kualifikasi storage asli (link final board lengkap).** VirtioMmioBlock dan RamBlock mengimpor
+   `IOBlockStorageDevice` asli lewat `build/storage-abi/interface-audit.json`. File itu dibuat oleh
+   `audit-storage-interface.py`, yang membutuhkan kandidat `native-apfs-load-positive` dan **observasi live QEMU/gdb**
+   (`darwinboot-storage-native-metadata/gdb-stop.json`: ukuran instance 0x90/0x88 dan translasi 4K). Tidak ada script
+   di UniXNU 62f203c yang membuat observasi itu, dan tidak ada rekamannya di ref UniXNU mana pun. Board EsaiJJ juga
+   tidak punya langkah `build-virtio-mmio-bindings.py`, padahal board xVanTuring punya.
+   Alternatif source-based dari UniXNU (`build-sheng-source-storage.py`) mensyaratkan arm64e iPadOS 26, jadi tidak
+   berlaku untuk target ini.
+   Melonggarkan syarat `live_native_4k` tidak dilakukan, karena itu berarti melemahkan pemeriksaan.

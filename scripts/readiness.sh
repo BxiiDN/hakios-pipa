@@ -13,7 +13,16 @@ have() {  # have WHAT PATH-OR-EMPTY
 	if [ -n "$2" ] && [ -s "$2" ]; then say "PRESENT  $1: $2 ($(sha256sum "$2" | cut -c1-16)...)"; else say "MISSING  $1"; missing=$((missing + 1)); fi
 }
 first() { { find "$OUT" -name "$1" -type f 2>/dev/null || true; } | sort | tail -1; }
-have "XNU 10063 kernel (kernel.macho)" "$(first kernel.macho)"
+kernel=$(find "$OUT" -path '*/kernel/kernel.macho' -type f 2>/dev/null | sort | tail -1 || true)
+# docs/BOOTSTRAP.md: the stage-A reference kernel stays at kernel/kernel.macho while stage B runs (the port's builders
+# read it there); if stage B failed it is still there, and it is never a boot candidate.
+for ref in $(find "$OUT" -path '*/stage-a/kernel.macho' -type f 2>/dev/null || true); do
+	if [ -n "$kernel" ] && cmp -s "$ref" "$kernel"; then
+		say "FAIL     kernel.macho is the stage-A reference kernel (no HID, display, storage or owner root): not a boot candidate"
+		kernel=; break
+	fi
+done
+have "XNU 10063 kernel (kernel.macho)" "$kernel"
 have "uefi-pipa firmware (.fd)" "$({ find "$WORK/uefi-pipa" -path '*pipa*' -name '*.fd' -type f 2>/dev/null || true; } | sort | tail -1)"
 have "payload volume (payload.img)" "$(first payload.img)"
 [ -n "$img" ] || img=$(first boot.img)
@@ -28,7 +37,7 @@ if [ $missing = 0 ]; then
 	# the image must be made of these very pieces, and they must be the ones this build recorded
 	manifest=$ROOT/logs/readiness-manifest.json
 	python3 "$ROOT/tools/build_manifest.py" "$WORK/UniXNU" --uefi "$WORK/uefi-pipa" --out "$manifest" >/dev/null
-	python3 "$ROOT/tools/image_consistency.py" --image "$img" --kernel "$(first kernel.macho)" --payload "$(first payload.img)" \
+	python3 "$ROOT/tools/image_consistency.py" --image "$img" --kernel "$kernel" --payload "$(first payload.img)" \
 		--firmware "$({ find "$WORK/uefi-pipa" -path '*pipa*' -name 'SILICIUM_UEFI.fd' -type f 2>/dev/null || true; } | sort | tail -1)" \
 		--manifest "$manifest" || missing=$((missing + 1))
 	"$ROOT/scripts/preflight.sh" --image "$img" "${pre[@]}" || missing=$((missing + 1))
