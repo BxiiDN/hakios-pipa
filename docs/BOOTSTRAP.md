@@ -132,3 +132,11 @@ archive display terpecahkan.
   `95719d8a…` dipilih manual, sparse-checkout non-cone (git 2.53), lalu `--check` alat itu PASS. Perlu perbaikan di hulu.
 - Sisa blocker link: referensi `weak_import` backlight (lihat STATUS.md). Rute yang sesuai rancangan: tahap B di macOS
   (ld Xcode), yang juga diperlukan untuk Turnip.
+
+## Sesi 8
+
+- Link final tahap B lolos setelah patch port 0007 (backlight KTZ8866), 0008 (NativeUfs verified, satu
+  `IOBlockStorageDevice`) dan 0010 (self-test owner-root nyata). Prelink selesai; kernel reproducible pada path sama.
+- `kernel-two-stage.sh` menerima `UNIXNU_OUT` untuk clean build di direktori baru. Pelajaran: jangan mengedit skrip
+  ini selama ia berjalan; bash membacanya bertahap (clean build pertama sesi 8 rusak karena itu, kernelnya tidak dipakai).
+- `gpu-userland` kini berjalan di tree pipa (ABI Adreno650, frontend dan pin translator pipa); belum diuji di macOS.

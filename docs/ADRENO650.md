@@ -50,3 +50,16 @@ dirender CPU — bandingkan fps keduanya. Sampai itu terlihat di unit pemilik: *
 | GPU INTEGRATION (archive display legacy, GMU/SQE/ZAP tertanam) | BLOCKED: firmware perangkat | `tools/firmware_check.py` |
 | `A650GmuTests` | NOT RUN | — |
 | GPU HARDWARE ACCELERATION | **NOT TESTED**. Tidak ada klaim | — |
+
+## Status per lapisan (sesi 8, lokal WSL2)
+
+| Lapisan | Status | Bukti |
+| --- | --- | --- |
+| GPU KERNEL ARCHIVE (`libAdreno650.a`, 31 objek) | **PASS (build)**, ter-link dalam kernel final | `evidence/repro-*/stage-b.log` |
+| GPU INTEGRATION (archive display legacy dengan GMU/SQE/ZAP/touch asli, layanan backlight KTZ8866) | **PASS (build + link)** | idem |
+| `A650GmuTests` (host test GMU/HFI) | **BUILD PASS untuk aarch64** (`-Werror`, statis, dengan `a650_gmu.bin` asli sebagai argumen). **NOT RUN**: kit HFI hanya untuk AArch64 little-endian, dan host x86 ini tidak punya `qemu-user` (perlu `sudo apt install qemu-user`) | `evidence/host-tests/a650-aarch64` |
+| Turnip iOS (`libvulkan_freedreno.dylib`) | **NOT BUILT**: butuh Xcode iphoneos SDK; WSL tidak punya, dan push untuk CI belum bisa (tanpa kredensial) | — |
+| Rute ABI Turnip/bridge | **DIPERBAIKI (belum diuji)**: `kernel-two-stage.sh gpu-userland` dulu berjalan di checkout UniXNU, jadi memakai KMD `drivers/Adreno740` dan frontend AdrenoMetal milik UniXNU, bukan milik kernel pipa. Kini di tree pipa: `Adreno740 -> Adreno650` pipa (konstanta dan ukuran sama, plus `MaxQueues`/`MaxBoBytesShift`), `AdrenoMetal` pipa, bridge dari pin translator pipa `720ef1ce` (patch port 0009), seperti build addon pipa yang berhasil di `macos-15-intel` | `scripts/kernel-two-stage.sh` |
+| Error RG88/GR88, `Dl_info` | **AKAR BELUM TERBUKTI**. Fakta: `u_format_gen.h` memakai `RG88/GR88` di 17 fungsi inline sendiri (17 + 2 = 19 error), jadi kedua cabang `UTIL_ARCH_*_ENDIAN` tidak terambil; `Dl_info` muncul bila `HAVE_DLADDR` aktif tanpa `HAVE_DLFCN_H`. Header publik Apple (Libc-1752, dyld-1378, xnu-12377) tidak menunjukkan perubahan yang menjelaskannya. Job CI `macos-gpu` (matriks macos-15/macos-26) mengirim error pertama, makro `HAVE_*` dan header SDK sebagai anotasi publik | `.github/workflows/unixnu-build.yml` |
+| GPU addon (`NativeAdrenoMetal.bundle`, trust bundle) | **SKIP = FAIL**. Ini input payload (`--gpu-addon`), bukan bagian `kernel.macho` | — |
+| GPU HARDWARE ACCELERATION | **NOT TESTED**. Tidak ada klaim | — |

@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 7, 23 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 8, 23 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,22 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — kernel, firmware, payload, boot image, root image dan
   anchor kunci owner belum ada; hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 8 (lokal WSL2; push belum bisa: tidak ada kredensial GitHub di WSL maupun Windows)
+
+| Pemeriksaan | Hasil | Bukti |
+| --- | --- | --- |
+| Lima simbol backlight | **SELESAI dengan driver nyata** (patch port 0007): commit port `421c34b` menghapus driver backlight TB-J716F (AMOLED, skala piksel) tetapi menyisakan referensi `weak_import`; ld Apple mengikatnya ke 0, ld64 cctools di Linux menolak. Kini didefinisikan oleh layanan AppleARMBacklight untuk KTZ8866 lewat master GENI I2C11 (`PipaBacklightService.cpp`, `PipaBacklightAttach.cpp`, `BacklightProbe.c`; kecerahan terlihat berubah di tablet pemilik pada 18 Nov, mati kecuali `sheng-backlight=1`), plus hook swap-cancel slot 345 di NativeLegacyDisplay. `native_backlight_scale` = 256: panel pipa LCD, piksel tetap skala penuh | `kernel-exports.txt` |
+| Duplicate symbol storage | **SELESAI** (patch port 0008): NativeUfs dikompilasi `NATIVE_VERIFIED_BLOCK=1` (setiap baca root diperiksa kebijakan owner; jalur kueri root dengan tiga UUID hardcoded tidak di-link), dan ShengUfs tidak mengompilasi `IOBlockStorageDevice` kedua bila audit storage ada | `kernel.log`: 0 duplicate |
+| `native_verified_root_probe` | **Kode nyata** (patch port 0010), menggantikan `ret` dari patch 0006: dengan `offline-owner-root-check=1`, kedua kebijakan tertanam harus lolos RSA-3072 lewat `vr_xnu_crypto`, dan tanda tangan, header, kunci serta panjang yang dimanipulasi harus ditolak. Host test dengan kebijakan asli + OpenSSL: PASS (2/2, semua manipulasi ditolak); anchor lain: FAIL | `tests/pipa-verified-root-selftest-host.c` (port) |
+| Final link + prelink tahap B | **PASS**: 0 undefined, 0 duplicate. `kernel.macho` `81fa31702fee3cb4f0a2ccf1893fa9c2fe5157984ab670e8b679bda8192ddfd6` (53 899 264 B, Mach-O 64-bit arm64 executable `NOUNDEFS|PIE`, UUID `9fcf0f3e…`, 26 409 ekspor, 18 segmen). Tahap B tetap dilaporkan FAIL oleh skrip karena GPU addon SKIP | `repro-v3-run2/` |
+| Reproducibility | **PASS**: dua clean build (direktori output baru, path sama) identik: tahap B `81fa3170…`, tahap A `1b094fd6…`. Build di path berbeda memang berbeda: string `__FILE__` berisi path build (1 294 kemunculan); kode dan data identik | `repro-v3-run{1,2}/sha256.txt` |
+| ShengHidInput recheck (kernel final) | **PASS**: teks asli, slot, ukuran instance, slot milik driver, 52 simbol HID asli tidak bergeser | `repro-v3-run2/recheck.log` |
+| Storage ABI pada kernel final | **TRANSFER PASS 12/12**; anchor dan kedua kebijakan dalam kernel = file owner byte-per-byte | `storage-transfer-final.json` |
+| Root iPadOS | `native-ufs-root-part=ipados`; `tools/storage_safety.py`: STORAGE OFFLINE PASS (default Android, timeout 10 s, entri recovery) | — |
+| Turnip iOS / bridge / GPU addon | **NOT BUILT** (butuh Xcode). Rute ABI diperbaiki dan job CI `macos-gpu` ditambahkan, keduanya belum dijalankan. Detail: [ADRENO650.md](ADRENO650.md) | — |
+| Host test port | Buttons, GpuPowerBoard, NativeBattery, TouchBoard: PASS (gcc + clang). `A650GmuTests`: build aarch64 PASS, NOT RUN (tanpa `qemu-user`) | `evidence/host-tests/` |
+| Akselerasi GPU di tablet | **NOT TESTED** | — |
 
 ## Sesi 7 (lokal, Windows 11 + WSL2 Ubuntu 26.04, tablet via adb Windows)
 
