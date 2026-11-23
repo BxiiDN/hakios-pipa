@@ -38,3 +38,15 @@ sesi ini: tidak bisa diuji tanpa hardware, dan basis iPadOS 17 yang dipilih suda
 Membedakan GPU nyata dari software rendering di tablet (langkah Claude Code): log kernel `gpu:` (mode 7: firmware
 GMU 0x20010008, HFI ready, 4 pesan startup), `NativeAdreno` terpublikasi, dan tanpa file publish plugin UI kembali
 dirender CPU — bandingkan fps keduanya. Sampai itu terlihat di unit pemilik: **NOT TESTED**.
+
+## Status build per lapisan (sesi 6, CI)
+
+| Lapisan | Status | Bukti |
+| --- | --- | --- |
+| GPU KERNEL ARCHIVE (`libAdreno650.a`, 31 objek NativeAdreno) | **PASS (build)** | run 45100879621, archive identik antar-run |
+| GPU addon (`build-pipa-gpu-addon.py`) | **SKIP = tidak dibangun**. Sesi 5 salah menghitungnya PASS. Builder mencetak "SKIP … missing Turnip libvulkan_freedreno.dylib" dan exit 0. Sekarang SKIP apa pun menggagalkan tahap B | log run 45100879621 |
+| GPU USERLAND BUILD: Turnip iOS (`libvulkan_freedreno.dylib`) | **FAIL (compile)**. Sudah lewat: seri patch Mesa (setelah backport header `turnip-frame-diagnostics`), konfigurasi meson, dan parser ir3 (bison 3.8.2). Berhenti dengan 19 error di Mesa util: `PIPE_FORMAT_RG88_UNORM/GR88_UNORM` tidak dideklarasikan di `u_format_gen.h`, `Dl_info`/`dladdr` di `disk_cache.h`. Akar penyebab belum dipastikan | run 45107232121 |
+| AdrenoMetal bridge, trust bundle asli | NOT RUN: menunggu Turnip. Trust bundle butuh IPSW lengkap | — |
+| GPU INTEGRATION (archive display legacy, GMU/SQE/ZAP tertanam) | BLOCKED: firmware perangkat | `tools/firmware_check.py` |
+| `A650GmuTests` | NOT RUN | — |
+| GPU HARDWARE ACCELERATION | **NOT TESTED**. Tidak ada klaim | — |

@@ -89,3 +89,20 @@ ini belum dibuktikan.
    Alternatif source-based dari UniXNU (`build-sheng-source-storage.py`) mensyaratkan arm64e iPadOS 26, jadi tidak
    berlaku untuk target ini.
    Melonggarkan syarat `live_native_4k` tidak dilakukan, karena itu berarti melemahkan pemeriksaan.
+
+## Sesi 6
+
+**Kernel tahap A reproducible.** Penyebab hash berbeda di sesi 5 ditemukan: `config/newvers.pl` milik XNU
+menuliskan `date` ke string versi ("Darwin Kernel Version 23.6.0: Mon Nov 23 03:16:45 UTC 2026; runner:…"),
+sedangkan semua archive identik. `KERNEL_BUILD_DATE`, yang oleh XNU sendiri disebut sebagai saklar build
+reproducible, sekarang dipatok ke tanggal commit pin UniXNU. Hasilnya, run 45105668358 dan 45106011890 (commit dan
+kunci ephemeral berbeda) menghasilkan `kernel.macho` `d0ba5de5…` dengan UUID `c700fb3e…` yang identik, begitu juga
+run 45107232121. Sidik jarinya dibuat oleh `tools/macho_fingerprint.py`.
+
+**Storage ABI: tiga status yang dipisahkan.**
+
+| Status | Hasil | Bukti |
+| --- | --- | --- |
+| ABI STATIC VERIFIED | **PASS**: semua pemeriksaan `audit-storage-interface.py` sebelum langkah live lolos pada kernel tahap A (190 slot, vtable unik, konstruktor/destruktor, getter metaclass) | run 45107232121, `kernel-two-stage.sh storage-static` |
+| ABI LIVE VERIFIED | **BELUM**. Jalurnya sudah ditemukan: board publik xVanTuring/UniXNU-qemu (97b75b1, IPSW dan kernelcache sama) punya `scripts/build-storage-abi.py`. Script itu mem-boot kernel board QEMU di QEMU TCG, menghentikannya dengan `gdb-stop.py` milik UniXNU di `native_apfs_probe_checkpoint`, membaca metaclass dan register translasi, lalu menjalankan audit tanpa diubah. Job `macos-qemu-storage` menjalankan jalur ini. Run pertama berhenti karena board QEMU belum mengenal `CONFIG_XNU_BUILD_ARCHIVES` (diperbaiki di `patches/unixnu-qemu/0001`) | run 45106011890, 45108598318 |
+| RUNTIME HARDWARE VERIFIED | NOT TESTED (QEMU bukan tablet) | — |

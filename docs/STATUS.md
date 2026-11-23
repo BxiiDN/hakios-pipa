@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 5, 23 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 6, 23 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -24,10 +24,10 @@ Dua status terpisah, tidak pernah disamakan:
 | Kompilasi U-Boot pipa (GitHub Actions, gcc 13.3, flex 2.6.4), dua build bersih | **PASS**: `u-boot.bin` `f6faf8e0…` (1 526 152 B), `u-boot` ELF `6bb971b1…`, DTB pipa `7c3faf93…`, image `hakios-pipa-bootmgr.img` `fa2c0951…` (776 192 B, header v1, page 2048); kedua build identik; tidak ada unresolved symbol; `.config`, env menu terkompilasi, DTB `xiaomi,pipa` dicek. **Menu belum dilihat di tablet** | [run 45073781629](https://github.com/BxiiDN/hakios-pipa/actions/runs/45073781629) |
 | Paket EFI UniXNU (macos-26, UniXNU `62f203c`) | **PASS**: `UniXNU.efi` `a2ceaf758c2b5892…` (95 232 B), `UniXNUDxe.efi` `1c54e08805827dd8…` (14 336 B), `UniXNURamDiskDxe.efi` `7d7375701159ebc4…` (15 360 B) | run 45081127559 |
 | Toolchain Linux UniXNU (ubuntu-24.04) | **PASS** + `--check`: clang 24.0.0git `58c46bae` `602430b2…`, ld64 `c4fa3cd1…`, migcom `a080a836…`, iig `64d7b95c…`, lzfse `73d68a52…` | run 45077836807 |
-| Kernel referensi tahap A (bukan image boot) | **PASS (build)**: 18 archive, link final, prelink; `kernel.macho` `510999e4…` / `9a2eec5b…` (51 974 144 B, 22 611 ekspor; **tidak reproducible** antar-run, penyebab belum dicek) | run 45099835381, 45100879621 |
+| Kernel referensi tahap A (bukan image boot) | **PASS (build), reproducible**: `d0ba5de5…` (51 974 144 B, UUID `c700fb3e…`) di tiga run dengan `KERNEL_BUILD_DATE` dipatok; beda di sesi 5 = tanggal build XNU | run 45105668358, 45106011890, 45107232121 |
 | Kernel board lengkap (tahap B) | **FAIL** di archive 20/21: firmware GMU/SQE/ZAP/touch perangkat tidak ada di CI. 19 archive PASS, termasuk ShengHidInput (ABI HID PASS terhadap kandidat tahap A), PMGR asli, Adreno 650, GPU addon, dan audit ABI display | run 45100879621, [BOOTSTRAP.md](BOOTSTRAP.md) |
 | Link final + prelink board lengkap | **BLOCKED**: firmware perangkat, lalu kualifikasi storage asli (butuh observasi live QEMU/gdb yang tidak bisa dibuat dengan UniXNU 62f203c) | [BOOTSTRAP.md](BOOTSTRAP.md) |
-| Firmware uefi-pipa (Mu-Silicium pipaPkg + UniXNU + DarwinBoot, CLANGPDB DEBUG) | **PASS (build)**: `SILICIUM_UEFI.fd` `bb3da32b80e2da57…` (3 145 728 B). Sesi 5 (run 45100879621): build PASS lagi, tetapi `6940dbff2d4d7832…`, **bukan bit-identik** dengan sesi 4 (input pin sama; penyebab belum dicek). `UniXNU.efi` `a2ceaf758c2b5892…` identik. Tidak dijalankan di tablet maupun QEMU | [run 45081127559](https://github.com/BxiiDN/hakios-pipa/actions/runs/45081127559) |
+| Firmware uefi-pipa | **PASS (build), reproducible**: `SILICIUM_UEFI.fd` `8e989103…` di enam build bersih dari tiga run, dengan `PYTHONHASHSEED=0`. Sebelumnya hanya `PcdDxe.efi` yang berbeda antar-build (urutan PCD database di BaseTools ikut seed hash Python). `UniXNU.efi` `a2ceaf75…` tetap. Tidak dijalankan di tablet maupun QEMU | run 45104257856, 45105536415, 45105668358, 45106011890 |
 | Payload, boot image, root image | **BLOCKED** (butuh kernel + firmware) | — |
 | Validator userland iPadOS 17 (`tools/userland_check.py`) | Alat + test PASS; **NOT RUN** pada IPSW (tidak diunduh di sesi ini) | — |
 | `A650GmuTests` | **NOT RUN** (butuh `kits/AdrenoFirmware`; menjalankannya ditolak pengaman sesi 2, tidak diulang) | — |
@@ -39,7 +39,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Komponen | Status | Catatan |
 | --- | --- | --- |
 | SoC, CPU | PARTIAL | Data board; host test; NOT TESTED |
-| GPU Adreno 650 | PARTIAL | KMD + GMU di UniXNU-pipa; `A650GmuTests` NOT RUN |
+| GPU Adreno 650 | PARTIAL (archive kernel PASS; Turnip iOS FAIL compile; addon tidak dibangun; [ADRENO650.md](ADRENO650.md)) | KMD + GMU di UniXNU-pipa; `A650GmuTests` NOT RUN |
 | Akselerasi GPU | NOT TESTED | — |
 | Display | PARTIAL | Framebuffer firmware; 144 Hz BLOCKED (tidak ada driver DSI/DPU) |
 | Kecerahan | BLOCKED | KTZ8866 di I2C11: tidak ada driver GENI I2C maupun KTZ8866 di port |
@@ -51,7 +51,7 @@ Dua status terpisah, tidak pernah disamakan:
 | Baterai / charging | PARTIAL / NOT TESTED | `NativeBattery` host test PASS |
 | Thermal / power | NOT TESTED | — |
 | Tombol | PARTIAL | Host test PASS |
-| Storage UFS | PARTIAL | Root dipindah ke `ipados`; menurut source tidak ada tulis ke `userdata` |
+| Storage UFS | PARTIAL (ABI storage asli: STATIC VERIFIED, LIVE belum) | Root dipindah ke `ipados`; menurut source tidak ada tulis ke `userdata` |
 | U-Boot | PARTIAL | Kompilasi + reproducible PASS di CI; belum diuji di tablet |
 | UEFI (uefi-pipa) | PARTIAL | Build PASS di CI; belum dijalankan di tablet |
 | Android boot | NOT TESTED | Tidak diubah |
