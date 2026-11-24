@@ -422,6 +422,244 @@ index 0000000..5fae416
 +      return 0;
 +  }
 +}
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptExport.h b/package/UniXNUPkg/Driver/GptViewDxe/GptExport.h
+new file mode 100644
+index 0000000..d17b073
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptExport.h
+@@ -0,0 +1,68 @@
++/** @file
++  The raw GPT of one disk as a file, sent as OneSend QR frames (the envelope and frame format of UniXNU's Advanced Logger
++  plugin, AdvancedLogDxe.c), so the owner can keep a byte-exact copy of LUN 0's partition table for recovery
++  (hakios-pipa docs/IPADOS-PARTITION.md, section 11). Pure C, built into GptViewDxe and into the host tests.
++
++  Container "HKGPT1" (little endian):
++    0   char[8]  "HKGPT1\0\0"
++    8   u32      block size
++    12  u32      head blocks (LBA 0 .. head-1: protective MBR, primary header, primary entries)
++    16  u64      disk blocks (last LBA + 1)
++    24  u32      tail blocks (the last tail blocks: backup entries, backup header)
++    28  u32      CRC32 of everything after this 32-byte header
++    32  head bytes, then tail bytes
++
++  Copyright (c) 2026, hakios-pipa contributors.
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef GPT_EXPORT_H_
++#define GPT_EXPORT_H_
++
++#include "GptScan.h"
++
++#define GPT_EXPORT_HEADER        32
++#define GPT_EXPORT_BLOCK_LENGTH  720       // ONESEND_BLOCK_LENGTH
++#define GPT_EXPORT_FRAME_HEADER  28
++#define GPT_EXPORT_FRAME_LENGTH  (GPT_EXPORT_FRAME_HEADER + GPT_EXPORT_BLOCK_LENGTH + 4)
++
++GS_U32 GptExportCrc32 (const void *Data, GS_U64 Length);
++
++// Container bytes into Out (Cap bytes); returns its length, 0 if it does not fit.
++GS_U64
++GptExportContainer (
++  GS_U32       BlockSize,
++  GS_U64       DiskBlocks,
++  const GS_U8  *Head,
++  GS_U32       HeadBlocks,
++  const GS_U8  *Tail,
++  GS_U32       TailBlocks,
++  GS_U8        *Out,
++  GS_U64       Cap
++  );
++
++// The "LMS1" envelope around Data, named Name with MIME type Mime; returns its length, 0 if it does not fit.
++GS_U64
++GptExportEnvelope (
++  const GS_U8  *Data,
++  GS_U64       DataLen,
++  const char   *Name,
++  const char   *Mime,
++  GS_U8        *Out,
++  GS_U64       Cap
++  );
++
++GS_U32 GptExportFrameCount (GS_U64 PayloadLen);
++
++// Frame Index of Payload (GPT_EXPORT_FRAME_LENGTH bytes into Frame), as AdvancedLogDxe's BuildFrame makes them.
++void
++GptExportFrame (
++  const GS_U8  *Payload,
++  GS_U64       PayloadLen,
++  GS_U32       Index,
++  GS_U32       SessionId,
++  GS_U32       PayloadCrc,
++  GS_U8        *Frame
++  );
++
++#endif
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptExport.c b/package/UniXNUPkg/Driver/GptViewDxe/GptExport.c
+new file mode 100644
+index 0000000..cc43a12
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptExport.c
+@@ -0,0 +1,158 @@
++/** @file
++  GptExport.h: container, OneSend envelope and frames. No library calls.
++
++  Copyright (c) 2026, hakios-pipa contributors.
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "GptExport.h"
++
++static void PutLe16 (GS_U8 *P, GS_U32 V) { P[0] = (GS_U8)V; P[1] = (GS_U8)(V >> 8); }
++static void PutLe32 (GS_U8 *P, GS_U32 V) { PutLe16 (P, V & 0xffff); PutLe16 (P + 2, V >> 16); }
++static void PutLe64 (GS_U8 *P, GS_U64 V) { PutLe32 (P, (GS_U32)V); PutLe32 (P + 4, (GS_U32)(V >> 32)); }
++
++static void
++Copy (GS_U8 *D, const GS_U8 *S, GS_U64 N)
++{
++  while (N--) {
++    *D++ = *S++;
++  }
++}
++
++GS_U32
++GptExportCrc32 (const void *Data, GS_U64 Length)
++{
++  const GS_U8  *P = (const GS_U8 *)Data;
++  GS_U32       Crc = 0xFFFFFFFFu;
++  GS_U64       I;
++  int          K;
++
++  for (I = 0; I < Length; I++) {
++    Crc ^= P[I];
++    for (K = 0; K < 8; K++) {
++      Crc = (Crc >> 1) ^ ((0u - (Crc & 1u)) & 0xEDB88320u);
++    }
++  }
++  return Crc ^ 0xFFFFFFFFu;
++}
++
++GS_U64
++GptExportContainer (
++  GS_U32       BlockSize,
++  GS_U64       DiskBlocks,
++  const GS_U8  *Head,
++  GS_U32       HeadBlocks,
++  const GS_U8  *Tail,
++  GS_U32       TailBlocks,
++  GS_U8        *Out,
++  GS_U64       Cap
++  )
++{
++  GS_U64  HeadBytes = (GS_U64)HeadBlocks * BlockSize;
++  GS_U64  TailBytes = (GS_U64)TailBlocks * BlockSize;
++  GS_U64  Total     = GPT_EXPORT_HEADER + HeadBytes + TailBytes;
++  GS_U32  I;
++
++  if (Total > Cap) {
++    return 0;
++  }
++  for (I = 0; I < GPT_EXPORT_HEADER; I++) {
++    Out[I] = 0;
++  }
++  Copy (Out, (const GS_U8 *)"HKGPT1", 6);
++  PutLe32 (Out + 8, BlockSize);
++  PutLe32 (Out + 12, HeadBlocks);
++  PutLe64 (Out + 16, DiskBlocks);
++  PutLe32 (Out + 24, TailBlocks);
++  Copy (Out + GPT_EXPORT_HEADER, Head, HeadBytes);
++  Copy (Out + GPT_EXPORT_HEADER + HeadBytes, Tail, TailBytes);
++  PutLe32 (Out + 28, GptExportCrc32 (Out + GPT_EXPORT_HEADER, HeadBytes + TailBytes));
++  return Total;
++}
++
++static GS_U64
++Len (const char *S)
++{
++  GS_U64  N = 0;
++
++  while (S[N]) {
++    N++;
++  }
++  return N;
++}
++
++GS_U64
++GptExportEnvelope (
++  const GS_U8  *Data,
++  GS_U64       DataLen,
++  const char   *Name,
++  const char   *Mime,
++  GS_U8        *Out,
++  GS_U64       Cap
++  )
++{
++  GS_U64  NameLen = Len (Name);
++  GS_U64  MimeLen = Len (Mime);
++  GS_U64  Total   = 26 + NameLen + MimeLen + DataLen;
++  GS_U32  Crc;
++
++  if ((Total > Cap) || (NameLen > 0xffff) || (MimeLen > 0xffff) || (DataLen > 0xffffffffu)) {
++    return 0;
++  }
++  Crc    = GptExportCrc32 (Data, DataLen);
++  Out[0] = 'L';
++  Out[1] = 'M';
++  Out[2] = 'S';
++  Out[3] = '1';
++  Out[4] = 2;
++  Out[5] = 0;
++  PutLe16 (Out + 6, (GS_U32)NameLen);
++  PutLe16 (Out + 8, (GS_U32)MimeLen);
++  PutLe32 (Out + 10, (GS_U32)DataLen);
++  PutLe32 (Out + 14, Crc);
++  PutLe32 (Out + 18, (GS_U32)DataLen);
++  PutLe32 (Out + 22, Crc);
++  Copy (Out + 26, (const GS_U8 *)Name, NameLen);
++  Copy (Out + 26 + NameLen, (const GS_U8 *)Mime, MimeLen);
++  Copy (Out + 26 + NameLen + MimeLen, Data, DataLen);
++  return Total;
++}
++
++GS_U32
++GptExportFrameCount (GS_U64 PayloadLen)
++{
++  return (GS_U32)((PayloadLen + GPT_EXPORT_BLOCK_LENGTH - 1) / GPT_EXPORT_BLOCK_LENGTH);
++}
++
++void
++GptExportFrame (
++  const GS_U8  *Payload,
++  GS_U64       PayloadLen,
++  GS_U32       Index,
++  GS_U32       SessionId,
++  GS_U32       PayloadCrc,
++  GS_U8        *Frame
++  )
++{
++  GS_U64  Offset = (GS_U64)Index * GPT_EXPORT_BLOCK_LENGTH;
++  GS_U64  Chunk  = PayloadLen - Offset < GPT_EXPORT_BLOCK_LENGTH ? PayloadLen - Offset : GPT_EXPORT_BLOCK_LENGTH;
++  GS_U32  I;
++
++  for (I = 0; I < GPT_EXPORT_FRAME_LENGTH; I++) {
++    Frame[I] = 0;
++  }
++  Frame[0] = 'O';
++  Frame[1] = 'S';
++  Frame[2] = 2;
++  Frame[3] = 0;
++  PutLe32 (Frame + 4, SessionId);
++  PutLe32 (Frame + 8, Index + Index / 4);          // AdvancedLogDxe BuildFrame: Sequence = BlockIndex + BlockIndex / 4
++  PutLe32 (Frame + 12, GptExportFrameCount (PayloadLen));
++  PutLe16 (Frame + 16, GPT_EXPORT_BLOCK_LENGTH);
++  PutLe16 (Frame + 18, 0);
++  PutLe32 (Frame + 20, (GS_U32)PayloadLen);
++  PutLe32 (Frame + 24, PayloadCrc);
++  Copy (Frame + GPT_EXPORT_FRAME_HEADER, Payload + Offset, Chunk);
++  PutLe32 (Frame + GPT_EXPORT_FRAME_HEADER + GPT_EXPORT_BLOCK_LENGTH,
++           GptExportCrc32 (Frame, GPT_EXPORT_FRAME_HEADER + GPT_EXPORT_BLOCK_LENGTH));
++}
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptFont.h b/package/UniXNUPkg/Driver/GptViewDxe/GptFont.h
 new file mode 100644
 index 0000000..fb115d8
@@ -558,14 +796,15 @@ index 0000000..857d781
 +};
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c
 new file mode 100644
-index 0000000..d7a0558
+index 0000000..ba309cf
 --- /dev/null
 +++ b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,509 @@
 +/** @file
 +  "GPT (read only)" in UniXNU's Tools menu: every whole disk's GPT, summarised on the panel and in the firmware log, so the
 +  owner can see whether UFS LUN 0 has room for an `ipados` partition (hakios-pipa docs/IPADOS-PARTITION.md, design A)
-+  without any change to the disk.
++  without any change to the disk. "GPT export (QR)": LUN 0's raw GPT sectors (protective MBR, primary header and entries,
++  backup entries and header) as OneSend QR frames, a byte-exact copy for recovery (section 11).
 +
 +  Read only by construction: the only storage call is EFI_BLOCK_IO_PROTOCOL.ReadBlocks (primary header at LBA 1, its entry
 +  array, the backup header at the last LBA) on handles whose media is not a logical partition. No WriteBlocks, FlushBlocks,
@@ -581,12 +820,15 @@ index 0000000..d7a0558
 +#include <Library/DebugLib.h>
 +#include <Library/MemoryAllocationLib.h>
 +#include <Library/UefiBootServicesTableLib.h>
++#include <Library/PrintLib.h>
++#include <Library/QrEncoderLib.h>
 +#include <Library/UefiLib.h>
 +#include <Protocol/BlockIo.h>
 +#include <Protocol/UniXNUMenuPlugin.h>
 +
 +#include "GptFont.h"
 +#include "GptScan.h"
++#include "GptExport.h"
 +
 +// tools/gpt_capacity.py need: root 9 457 106 944 + guard 4 MiB + Data window 8 590 200 832 + log reserve 1 GiB
 +#define GPT_VIEW_NEED_BYTES  19126026240ULL
@@ -857,11 +1099,195 @@ index 0000000..d7a0558
 +  return EFI_SUCCESS;
 +}
 +
++#define GPT_EXPORT_INTERVAL_MS  700
++#define GPT_EXPORT_NAME         "pipa-lun0-gpt.hkgpt"
++#define GPT_EXPORT_MIME         "application/octet-stream"
++
++// LUN 0 (the whole disk holding "userdata"), its summary and BlockIo; FALSE if there is none with a sound header.
++STATIC
++BOOLEAN
++FindLun0 (
++  OUT EFI_BLOCK_IO_PROTOCOL  **Found,
++  OUT GPT_SCAN_SUMMARY       *Summary
++  )
++{
++  EFI_HANDLE             *Handles;
++  UINTN                  Count;
++  UINTN                  Index;
++  EFI_BLOCK_IO_PROTOCOL  *BlockIo;
++
++  if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &Count, &Handles))) {
++    return FALSE;
++  }
++  for (Index = 0; Index < Count; Index++) {
++    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo)) ||
++        (BlockIo->Media == NULL) || BlockIo->Media->LogicalPartition || !BlockIo->Media->MediaPresent ||
++        (BlockIo->Media->BlockSize < 512) || (BlockIo->Media->BlockSize > 4096) || (BlockIo->Media->LastBlock < 64))
++    {
++      continue;
++    }
++    ScanDisk (BlockIo, Summary);
++    if (Summary->HasUserdata && ((Summary->Flags & (GPT_SCAN_NO_SIGNATURE | GPT_SCAN_BAD_HEADER)) == 0)) {
++      *Found = BlockIo;
++      FreePool (Handles);
++      return TRUE;
++    }
++  }
++  FreePool (Handles);
++  return FALSE;
++}
++
++STATIC
++VOID
++DrawFrame (
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL   *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT       *Content,
++  IN UNIXNU_MENU_PLUGIN_PROTOCOL    *This,
++  IN UNIXNU_MENU_PLUGIN_DRAW_STATUS DrawStatus,
++  IN UINT8                          *Frame,
++  IN UINTN                          Index,
++  IN UINTN                          Count
++  )
++{
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *Bitmap;
++  INTN                           Region;
++  CHAR16                         Status[64];
++
++  Region = (INTN)MIN (Content->Width, Content->Height) * 9 / 10;
++  Bitmap = NULL;
++  if (EFI_ERROR (QrEncodeData (QrAutoVersion, QrECLevel_L, QrByteMode, 0, Frame, GPT_EXPORT_FRAME_LENGTH, Region, &Bitmap)) ||
++      (Bitmap == NULL))
++  {
++    return;
++  }
++  Gop->Blt (Gop, Bitmap, EfiBltBufferToVideo, 0, 0, Content->X + (Content->Width - (UINT32)Region) / 2,
++            Content->Y + (Content->Height - (UINT32)Region) / 2, (UINTN)Region, (UINTN)Region, 0);
++  FreePool (Bitmap);
++  if (DrawStatus != NULL) {
++    UnicodeSPrint (Status, sizeof (Status), L"GPT export (QR)  %u/%u  -- OneSend; Power: back", (UINT32)(Index + 1), (UINT32)Count);
++    DrawStatus (This, 0, Status);
++  }
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++GptExportRun (
++  IN UNIXNU_MENU_PLUGIN_PROTOCOL    *This,
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL   *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT       *Content,
++  IN UNIXNU_MENU_PLUGIN_DRAW_STATUS DrawStatus
++  )
++{
++  EFI_BLOCK_IO_PROTOCOL  *BlockIo;
++  GPT_SCAN_SUMMARY       Summary;
++  UINT32                 BlockSize;
++  UINT32                 EntryBlocks;
++  UINT32                 HeadBlocks;
++  UINT32                 TailBlocks;
++  UINT64                 Blocks;
++  VOID                   *HeadAlloc;
++  VOID                   *TailAlloc;
++  UINT8                  *Head;
++  UINT8                  *Tail;
++  UINT8                  *Container;
++  UINT8                  *Envelope;
++  UINT64                 ContainerLen;
++  UINT64                 EnvelopeLen;
++  UINT8                  Frame[GPT_EXPORT_FRAME_LENGTH];
++  UINT32                 PayloadCrc;
++  UINT32                 SessionId;
++  UINTN                  FrameCount;
++  UINTN                  Index;
++  UINTN                  Signaled;
++  EFI_EVENT              Timer;
++  EFI_EVENT              Events[2];
++  UINTN                  EventCount;
++  EFI_INPUT_KEY          Key;
++  UNIXNU_PLUGIN_RECT     Text;
++
++  if ((Gop == NULL) || (Content == NULL) || (Content->Width == 0) || (Content->Height == 0)) {
++    return EFI_INVALID_PARAMETER;
++  }
++  Fill (Gop, Content);
++  if (!FindLun0 (&BlockIo, &Summary)) {
++    Text = *Content;
++    DrawLine (Gop, &Text, Content->Y, "GPT export: no disk with a sound GPT holding userdata", 1, mForeground);
++    gBS->Stall (3000 * 1000);
++    return EFI_NOT_FOUND;
++  }
++  BlockSize   = BlockIo->Media->BlockSize;
++  Blocks      = BlockIo->Media->LastBlock + 1;
++  EntryBlocks = (UINT32)(((UINT64)Summary.EntryCount * Summary.EntrySize + BlockSize - 1) / BlockSize);
++  HeadBlocks  = (UINT32)Summary.EntriesLba + EntryBlocks;      // LBA 0 .. end of the primary entries
++  TailBlocks  = EntryBlocks + 1;                               // backup entries and the backup header
++  Head        = ReadAligned (BlockIo, 0, (UINTN)HeadBlocks * BlockSize, &HeadAlloc);
++  Tail        = ReadAligned (BlockIo, Blocks - TailBlocks, (UINTN)TailBlocks * BlockSize, &TailAlloc);
++  Container   = AllocatePool (GPT_EXPORT_HEADER + ((UINTN)HeadBlocks + TailBlocks) * BlockSize);
++  Envelope    = AllocatePool (GPT_EXPORT_HEADER + ((UINTN)HeadBlocks + TailBlocks) * BlockSize + 256);
++  if ((Head == NULL) || (Tail == NULL) || (Container == NULL) || (Envelope == NULL)) {
++    DrawLine (Gop, Content, Content->Y, "GPT export: read or allocation failed", 1, mForeground);
++    gBS->Stall (3000 * 1000);
++    return EFI_DEVICE_ERROR;
++  }
++  ContainerLen = GptExportContainer (BlockSize, Blocks, Head, HeadBlocks, Tail, TailBlocks, Container,
++                                     GPT_EXPORT_HEADER + ((UINT64)HeadBlocks + TailBlocks) * BlockSize);
++  EnvelopeLen  = GptExportEnvelope (Container, ContainerLen, GPT_EXPORT_NAME, GPT_EXPORT_MIME, Envelope,
++                                    GPT_EXPORT_HEADER + ((UINT64)HeadBlocks + TailBlocks) * BlockSize + 256);
++  FreePool (HeadAlloc);
++  FreePool (TailAlloc);
++  FreePool (Container);
++  PayloadCrc = GptExportCrc32 (Envelope, EnvelopeLen);
++  SessionId  = 0x48474B31u ^ PayloadCrc;                      // "HGK1" ^ CRC: a new session whenever the table changes
++  FrameCount = GptExportFrameCount (EnvelopeLen);
++  DEBUG ((DEBUG_ERROR, "GPTVIEW: export %lu bytes, %u frames, container CRC32 %08x\n", EnvelopeLen, (UINT32)FrameCount,
++          GptExportCrc32 (Envelope + EnvelopeLen - ContainerLen + GPT_EXPORT_HEADER, ContainerLen - GPT_EXPORT_HEADER)));
++
++  gBS->CreateEvent (EVT_TIMER, TPL_CALLBACK, NULL, NULL, &Timer);
++  gBS->SetTimer (Timer, TimerPeriodic, EFI_TIMER_PERIOD_MILLISECONDS (GPT_EXPORT_INTERVAL_MS));
++  EventCount           = 0;
++  Events[EventCount++] = Timer;
++  if (gST->ConIn != NULL) {
++    Events[EventCount++] = gST->ConIn->WaitForKey;
++  }
++  Index = 0;
++  GptExportFrame (Envelope, EnvelopeLen, (UINT32)Index, SessionId, PayloadCrc, Frame);
++  DrawFrame (Gop, Content, This, DrawStatus, Frame, Index, FrameCount);
++  for ( ; ;) {
++    if (EFI_ERROR (gBS->WaitForEvent (EventCount, Events, &Signaled))) {
++      break;
++    }
++    if (Signaled == 0) {
++      Index = (Index + 1) % FrameCount;
++      GptExportFrame (Envelope, EnvelopeLen, (UINT32)Index, SessionId, PayloadCrc, Frame);
++      DrawFrame (Gop, Content, This, DrawStatus, Frame, Index, FrameCount);
++      continue;
++    }
++    if (EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
++      continue;
++    }
++    if ((Key.UnicodeChar == CHAR_CARRIAGE_RETURN) || (Key.UnicodeChar == CHAR_LINEFEED) || (Key.ScanCode == SCAN_ESC)) {
++      break;
++    }
++  }
++  gBS->SetTimer (Timer, TimerCancel, 0);
++  gBS->CloseEvent (Timer);
++  FreePool (Envelope);
++  return EFI_SUCCESS;
++}
++
 +STATIC UNIXNU_MENU_PLUGIN_PROTOCOL  mGptViewPlugin = {
 +  UNIXNU_MENU_PLUGIN_PROTOCOL_SIGNATURE,
 +  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
 +  L"GPT (read only)",
 +  GptViewRun
++};
++
++STATIC UNIXNU_MENU_PLUGIN_PROTOCOL  mGptExportPlugin = {
++  UNIXNU_MENU_PLUGIN_PROTOCOL_SIGNATURE,
++  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
++  L"GPT export (QR)",
++  GptExportRun
 +};
 +
 +EFI_STATUS
@@ -871,18 +1297,28 @@ index 0000000..d7a0558
 +  IN EFI_SYSTEM_TABLE  *SystemTable
 +  )
 +{
++  EFI_STATUS  Status;
++  EFI_HANDLE  Second;
++
 +  (VOID)SystemTable;
-+  return gBS->InstallProtocolInterface (&ImageHandle, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mGptViewPlugin);
++  Status = gBS->InstallProtocolInterface (&ImageHandle, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mGptViewPlugin);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++  // one protocol instance per handle: the export tool gets a handle of its own
++  Second = NULL;
++  return gBS->InstallProtocolInterface (&Second, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mGptExportPlugin);
 +}
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf
 new file mode 100644
-index 0000000..9c711b8
+index 0000000..c553c55
 --- /dev/null
 +++ b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,49 @@
 +## @file
 +#  Publishes a UniXNU menu plugin, "GPT (read only)", that summarises every whole disk's GPT (primary and backup header,
-+#  entry CRCs, free ranges) on the panel and in the log. The only storage call is BlockIo ReadBlocks.
++#  entry CRCs, free ranges) on the panel and in the log, and "GPT export (QR)", LUN 0's raw GPT sectors as OneSend QR
++#  frames. The only storage call is BlockIo ReadBlocks.
 +#  hakios-pipa docs/IPADOS-PARTITION.md.
 +#
 +#  Copyright (c) 2026, hakios-pipa contributors.
@@ -901,11 +1337,14 @@ index 0000000..9c711b8
 +  GptViewDxe.c
 +  GptScan.c
 +  GptScan.h
++  GptExport.c
++  GptExport.h
 +  GptFont.c
 +  GptFont.h
 +
 +[Packages]
 +  MdePkg/MdePkg.dec
++  MsGraphicsPkg/MsGraphicsPkg.dec
 +  UniXNUPkg/UniXNUPkg.dec
 +
 +[LibraryClasses]
@@ -913,6 +1352,8 @@ index 0000000..9c711b8
 +  BaseMemoryLib
 +  DebugLib
 +  MemoryAllocationLib
++  PrintLib
++  QrEncoderLib
 +  UefiBootServicesTableLib
 +  UefiDriverEntryPoint
 +  UefiLib

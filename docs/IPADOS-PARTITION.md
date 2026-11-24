@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–16)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–17)
 
 **Status (24 Nov, terukur di tablet): LUN 0 tidak punya ruang kosong; Rancangan A tidak mungkin. Belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -272,3 +272,60 @@ Kesimpulan: dengan perangkat ini sekarang, root iPadOS internal **hanya** bisa l
 Pemulihan bila B gagal: GPT lama dari dump (#4) lewat `fastboot flash partition:0`, lalu format `userdata` dan
 first boot Android dengan ROM port yang sama (#3), lalu pulihkan backup (#1). Fastboot (ABL) tidak tersentuh oleh semua
 langkah ini.
+
+## 11. Sesi 17: persiapan Rancangan B (belum ada persetujuan mengubah data)
+
+### Prasyarat, diperiksa alat (`tools/design_b_readiness.py`; hari ini: **NOT READY**)
+
+| # | Prasyarat | Status | Yang dibutuhkan |
+| --- | --- | --- | --- |
+| 1 | Backup terverifikasi | MISSING | persetujuan pemilik untuk `scripts/backup-android.sh backup ~/android-backup-…` (layar di-unlock, baterai ≥ 50 %) |
+| 2 | Uji pulih | MISSING | pemilik memulihkan satu aplikasi/berkas, mencatat `result: OK` |
+| 3 | Paket ROM port terpasang | MISSING | dari porter: boot/vendor_boot/dtbo (lulus `rom_match.py`), vbmeta/vbmeta_system, super atau image partisinya |
+| 4 | Dump GPT LUN 0 | MISSING | jalankan Tools → "GPT export (QR)" (butuh persetujuan RAM-boot) dan terima dengan OneSend; `gpt_export_decode.py` |
+| 5 | Penulis GPT | MISSING (sengaja) | dibuat setelah 1–4 |
+| 6 | Persetujuan | BLOCKED | `userdata_erase_confirmed` + `backup_verified` |
+
+### Backup (`scripts/backup-android.sh`, diaudit dan diperbaiki)
+
+- `adb` di sini adalah `adb.exe` Windows: path PC sekarang selalu `wslpath -w` (dulu path Linux hanya kebetulan jalan
+  dari direktori kerja di UNC WSL). Diuji pada file sistem non-pribadi: hash tablet = hash PC (`1a7eccd7…`), 37 MB/s.
+- Setiap file `/sdcard` dan setiap split APK di-hash **di tablet** (`sha256sum` toybox, read-only) dan di PC, lalu
+  dibandingkan; file 0 byte dari pull yang gagal tertangkap. `verify` memeriksa keutuhan dan kelengkapan.
+- `plan` (preflight tanpa menyalin), `restore-plan` (hanya mencetak `adb push` / `adb install-multiple`).
+- Menolak direktori di repo dan di drive Windows (`/mnt/*`, NTFS menolak sebagian nama berkas Android).
+- Menolak bila penyimpanan pengguna masih terkunci: pada 24 Nov user 0 `RUNNING_LOCKED` (layar belum di-unlock sejak
+  restart) → `/sdcard` tidak terpasang untuk adb. `need_android` juga diperbaiki (CRLF `adb.exe`: `device\r`).
+- 7 tes dengan adb palsu (`tests/test_backup_android.py`).
+- Tidak tercakup oleh adb tanpa root: data privat aplikasi, akun, SMS/log panggilan, kunci Wi-Fi → backup HyperOS
+  bawaan (arsipnya ikut lewat `/sdcard/MIUI/backup`), Google/Mi Cloud, ekspor milik aplikasi.
+
+### Ekspor GPT LUN 0 (plugin "GPT export (QR)", `patches/unixnu/0007`)
+
+- Hanya `ReadBlocks`: LBA 0..5 (MBR pelindung, header + entri primer) dan 5 LBA terakhir (entri + header cadangan) dari
+  disk yang memuat `userdata`. Wadah `HKGPT1` (CRC32) dalam amplop `LMS1` dan frame OneSend `OS` 720 B — format yang
+  sama dengan plugin Advanced Logger UniXNU — sebagai 63 QR yang berputar; diterima aplikasi OneSend di ponsel lain
+  (`UniXNU docs/porting/log-capture.md`) sebagai `pipa-lun0-gpt.hkgpt`.
+- `tools/gpt_export_decode.py`: menerima wadah, amplop, atau frame mentah (urutan bebas, berulang boleh), memeriksa
+  semua CRC, GPT primer dan cadangan, menulis `head.bin`/`tail.bin` (sektor persis untuk pemulihan) dan `sda.bin`.
+- Tes (`test_gpt_export.py`, 5): kode C pengekspor dari patch → frame → dekoder = byte-identik dengan LUN 0 terukur;
+  frame hilang/rusak ditolak; cadangan rusak dilaporkan.
+- Build lokal: driver 47 616 B (dua plugin), FV 0x197ba8/0x300000, FD `5d7a523f…`; image MODE A
+  `~/hakios/payload-v7-gptexport.*/…/boot.img` `9c100b1d…` 120 258 560 B: IMAGE CONSISTENT, ABL LAYOUT PASS.
+  **Belum dijalankan.**
+
+### Rencana pemulihan Android untuk Rancangan B (urutan bila kelak disetujui)
+
+1. Semua prasyarat 1–4 PASS; baterai ≥ 80 % dan diisi; `fastboot getvar current-slot` terbaca.
+2. **Tulis GPT baru saja** (penulis #5): hanya ujung `userdata` turun ke LBA 56 637 183 dan entri `ipados`
+   56 637 184..61 880 314 ditambah. Isi `userdata` belum disentuh.
+   - Gagal / Android tidak mau mount (f2fs lebih besar dari partisinya — diharapkan): tulis kembali `head.bin`/`tail.bin`
+     dari #4 → tabel lama → **data Android utuh** (belum ada yang ditulis di wilayah `ipados`). Titik balik terakhir.
+3. Format `userdata` + `metadata` (enkripsi metadata terikat kunci baru) → first boot Android dengan ROM yang sama.
+   - Android tidak boot: flash ulang paket ROM port #3, format lagi, first boot.
+4. Pulihkan: backup HyperOS bawaan, lalu `backup-android.sh restore-plan` (berkas, aplikasi), lalu cloud/ekspor aplikasi.
+5. Baru kemudian image root iPadOS ditulis ke `ipados` (driver menolak jendela tulis pada `userdata`).
+
+Fastboot (ABL) tidak tersentuh di langkah mana pun. Belum diketahui: apakah ABL mengizinkan `fastboot flash partition:0`
+tanpa critical-unlock pada perangkat ini (string ABL: "Flashing is not allowed for Critical Partitions") — dibaca
+dengan `getvar` sebelum #5 dibuat.

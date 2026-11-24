@@ -5,7 +5,7 @@ PRIVATE=${HAKIOS_PRIVATE:-$ROOT/private}
 mkdir -p "$PRIVATE"; chmod 700 "$PRIVATE"
 need_android() {
 	need adb
-	[ "$(adb get-state 2>/dev/null)" = device ] || die "no Android device on adb (USB debugging on, authorised)"
+	[ "$(adb get-state 2>/dev/null | tr -d '\r')" = device ] || die "no Android device on adb (USB debugging on, authorised)"
 	local dev; dev=$(adb shell getprop ro.product.device | tr -d '\r')
 	[ "$dev" = pipa ] || die "the device is '$dev', not pipa"
 }

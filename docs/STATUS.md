@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 16, 24 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 17, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,17 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — sesi 11–12: hanya image root partisi `ipados` yang belum ada
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 17 (persiapan Rancangan B; adb read-only; tidak ada backup, boot, flash, atau tulisan)
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| Android | normal: `boot_completed=1`, slot `_b`, kernel 5.10.241, `OS4.0.8.0.XPZCNXM`; riwayat boot `reboot,userrequested` |
+| Paket ROM port | tidak ditemukan secara publik (build resmi pipa berhenti di HyperOS 2/Android 14); harus dari porter |
+| Backup | skrip diaudit: path `adb.exe` (`wslpath -w`), hash tablet-vs-PC per berkas, cek layar terkunci, `plan`/`restore-plan`; preflight nyata: **user storage RUNNING_LOCKED** (unlock dulu) |
+| Ekspor GPT | plugin "GPT export (QR)" + dekoder; image MODE A v7 `9c100b1d…` siap, belum dijalankan |
+| Prasyarat B | `tools/design_b_readiness.py`: NOT READY (5 MISSING, persetujuan BLOCKED) |
+| CI | a512ead: `macos-firmware` PASS dengan plugin (reproducible); `macos-kernel`/GPU masih antre saat dicatat |
 
 ## Sesi 16 (GPT LUN 0 terbaca di tablet lewat plugin UEFI; hanya `fastboot boot` RAM, disetujui pemilik)
 

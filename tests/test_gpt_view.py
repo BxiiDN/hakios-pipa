@@ -137,7 +137,7 @@ class ReadOnlySource(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         subprocess.run([GIT, 'init', '-q', str(tmp)], check=True)
         subprocess.run([GIT, 'apply', str(PATCH)], cwd=tmp, check=True)
-        cls.src = '\n'.join((tmp / DIR / f).read_text() for f in ('GptViewDxe.c', 'GptScan.c'))
+        cls.src = '\n'.join((tmp / DIR / f).read_text() for f in ('GptViewDxe.c', 'GptScan.c', 'GptExport.c'))
         cls.inf = (tmp / DIR / 'GptViewDxe.inf').read_text()
 
     def test_only_readblocks(self):

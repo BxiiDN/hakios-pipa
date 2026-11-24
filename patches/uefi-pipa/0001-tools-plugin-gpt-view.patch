@@ -1,15 +1,17 @@
 diff --git a/Platforms/Xiaomi/pipaPkg/pipa.dsc b/Platforms/Xiaomi/pipaPkg/pipa.dsc
 --- a/Platforms/Xiaomi/pipaPkg/pipa.dsc
 +++ b/Platforms/Xiaomi/pipaPkg/pipa.dsc
-@@ -106,6 +106,8 @@
+@@ -106,7 +106,10 @@
    UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
    shengPkg/Drivers/ShengBootMemoryDxe/ShengBootMemoryDxe.inf
    DarwinBootPkg/Driver/DarwinBoot.inf
-+  # hakios-pipa: Tools > "GPT (read only)" (docs/IPADOS-PARTITION.md); BlockIo ReadBlocks only
++  # hakios-pipa: Tools > "GPT (read only)" and "GPT export (QR)" (docs/IPADOS-PARTITION.md); BlockIo ReadBlocks only
 +  UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf
  
  [LibraryClasses]
    UniXNULib|UniXNUPkg/Library/UniXNULib/UniXNULib.inf
++  QrEncoderLib|MsGraphicsPkg/Library/QrEncoderLib/QrEncoderLib.inf
+   FdtLib|MdePkg/Library/BaseFdtLib/BaseFdtLib.inf
 diff --git a/Platforms/Xiaomi/pipaPkg/pipa.fdf b/Platforms/Xiaomi/pipaPkg/pipa.fdf
 --- a/Platforms/Xiaomi/pipaPkg/pipa.fdf
 +++ b/Platforms/Xiaomi/pipaPkg/pipa.fdf
