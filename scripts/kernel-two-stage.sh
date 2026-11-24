@@ -232,8 +232,13 @@ PY
 	# The bridge: pipa's drivers/AdrenoMetal/bridge on its own translator pin (scripts/build-adreno-metal-bridge.py, port
 	# patch 0009: its 21 patches apply to metal2vulkan 720ef1ce and to no later pin).
 	m2v=$TREE/.cache/gpu-reference/metal2vulkan
-	[ -d "$m2v/.git" ] || git clone -q --filter=blob:none https://github.com/steelbrain/metal2vulkan.git "$m2v"
-	git -C "$m2v" checkout -q --detach 720ef1ce9ae2a2068999a8675717418b9416283e
+	# a partial clone fetches blobs at checkout: both are network steps (run 45292813840: "Connection reset by peer")
+	for attempt in 1 2 3; do
+		{ [ -d "$m2v/.git" ] || git clone -q --filter=blob:none https://github.com/steelbrain/metal2vulkan.git "$m2v"; } &&
+			git -C "$m2v" checkout -q --detach 720ef1ce9ae2a2068999a8675717418b9416283e && break
+		[ $attempt = 3 ] && die "gpu-userland: metal2vulkan 720ef1ce could not be fetched"
+		say "gpu-userland: metal2vulkan fetch attempt $attempt failed"; sleep 30
+	done
 	command -v brew >/dev/null && export LLVM_AS="$(brew --prefix llvm)/bin/llvm-as"
 	# build-adreno-metal-bridge.py runs `cargo +1.98.0 build --target aarch64-apple-ios`; rustup fetches 1.98.0 on
 	# demand but not its iOS std (run 45262156041: E0463 "can't find crate for `core`" in typenum).

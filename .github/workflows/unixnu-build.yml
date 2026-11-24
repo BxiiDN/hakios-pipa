@@ -122,7 +122,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
-        run: scripts/kernel-two-stage.sh a
+        # stage A downloads Apple's public headers and the Linux sources it builds against; run 45292813840 lost one to a
+        # 502 from GitHub. A second attempt, as ~/hakios/repro-build.sh does locally; a real build error fails both.
+        run: scripts/kernel-two-stage.sh a || { echo "stage A attempt 1 failed; retrying once"; sleep 60; scripts/kernel-two-stage.sh a; }
       - name: Storage ABI, static checks only (UniXNU audit-storage-interface.py on the stage-A kernel)
         continue-on-error: true
         env:
