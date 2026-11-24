@@ -1,4 +1,4 @@
-# MODE B: menu Android / iPadOS setiap tablet dinyalakan — rancangan, belum dicoba (audit sesi 11)
+# MODE B: menu Android / iPadOS setiap tablet dinyalakan — rancangan, belum dicoba (audit sesi 11–12)
 
 | Mode | Cara | Status |
 | --- | --- | --- |
@@ -65,3 +65,90 @@ lalu dipulihkan dari backup. Prosedur (tidak dijalankan):
    menolak membuka jendela tulis apa pun pada partisi bernama `userdata`.
 5. Pemulihan bila gagal: fastboot ROM resmi dengan **versi sama** (`flash_all` mengembalikan GPT stock dan menghapus
    data) + backup; periksa `fastboot getvar anti` sebelumnya.
+
+## Sesi 12: B5 divalidasi offline (tanpa tablet, tanpa flash)
+
+### ABL, dari biner
+
+Sumber: OTA resmi `OS2.0.16.0.UMZMIXM`, partisi `abl` (`652491b4…`) dan `xbl` (`076b2dab…`) diekstrak dengan
+`tools/ota_extract.py` (hash tiap partisi = `new_partition_info` manifest; `boot` hasil ekstraksi byte-identik dengan
+ekstraksi sesi 1). FV LinuxLoader dibuka (LZMA) dan di-disassemble; file disimpan di `~/.hakios-private`, tidak di Git.
+**Tablet kini menjalankan OS4.0.8.0**: aturan di bawah milik ABL OS2.0.16 dan harus dicocokkan dengan ABL yang terpasang
+sebelum boot apa pun.
+
+| Aturan | Bukti | Dipakai di |
+| --- | --- | --- |
+| Region kernel ABL = `0xA0000000 + 0x10000000` (256 MiB) | XBL `uefiplat.cfg`: `0xA0000000, 0x10000000, "Kernel"`; ABL membacanya sebagai variabel UEFI `KernelBaseAddr`/`KernelSize` (`.text 0x16550/0x16598`), fallback base + `0x5600000` | `tools/abl_layout.py` |
+| KernelLoadAddr = base + `0x80000` (Image arm64) | `.text 0x16658` | idem |
+| Ramdisk di ujung region: end − ALIGN(ramdisk + vendor ramdisk, page) − page; DTB = ramdisk − page − 2 MiB; DTB ≤ kernel ditolak | `.text 0x16680..0x166b8` | idem |
+| Image `ARMd`: `image_size` (header +0x10) ≤ DTB − kernel, kalau tidak "DTB header can get corrupted due to runtime kernel size" | `.text 0x169c0..0x16a20` | idem |
+| Image > partisi boot ditolak ("Image is too large for the partition") | `.text 0x379c4`; cocok dengan pengamatan 17 Nov | idem |
+| "Ramdisk size is over the limit" hanya cek overflow alamat | `.text 0x17000` | — |
+| Boot normal: ABL menambah ` androidboot.force_normal_boot=1`; charger: `androidboot.mode=charger`; recovery (Vol+, `reboot recovery`) tanpa keduanya. pipa tidak punya partisi `recovery` | string LinuxLoader; `/dev/block/by-name` (read-only) | `tools/b5_shim_model.py` |
+| `max-download-size` fastboot | nilai runtime, **tidak** bisa diturunkan statis; yang terbukti: image 130,7 MiB diterima `fastboot boot` | terbuka |
+
+Hasil `abl_layout.py`: boot stock (v3, Image `image_size` 61,3 MiB, ramdisk 19,2 MiB) → kernel `0xa0080000`, DTB
+`0xaeac3000`, ramdisk `0xaecc4000`, ruang kernel **234,3 MiB**: PASS. Image MODE A v5 (v1, gzip, ramdisk 112 MiB): PASS.
+
+### Rancangan B5 (pemilih tanpa membaca tombol sendiri)
+
+`boot_<aktif>` = header + ramdisk Android stock; kernel = Image Android stock + shim + FD uefi-pipa + payload. Shim di
+entry Image memakai keputusan ABL sendiri:
+
+1. tree di x0 tidak valid, tanpa `/chosen/bootargs`, charger, atau `force_normal_boot=1` → lanjut ke kode Image stock
+   tanpa mengubah apa pun (**boot Android normal tidak memakai reset**: ABL yang memuatnya, seperti biasa);
+2. boot recovery (tahan Vol+) → timpa `/chosen linux,initrd-start/-end` di tempat (panjang sama) dengan alamat payload,
+   lalu BootShim dengan x0 sama. `ShengBootMemoryDxe`/`UniXNURamDiskDxe` membaca payload dari properti itu; region
+   `Kernel` bertipe Reserv sehingga kernel/ramdisk/DTB Android tidak disentuh UEFI.
+
+Spesifikasi yang bisa dites: `tools/b5_shim_model.py` (tes dengan tree dtc dan dengan **DTB Android stock asli** dari
+`vendor_boot`, properti `/chosen` diisi seperti ABL). Shim assembly **belum ditulis**; ia harus lulus kasus yang sama.
+
+Anggaran (`abl_layout.py --b5`, payload v5 112 MiB): shim di `0x3262000`, FD `0x3272000`, payload `0x3572000` setelah
+awal Image (boleh di dalam bss Linux: di jalur Android shim sudah melompat sebelum Linux menghapus bss; di jalur menu
+Linux tidak jalan). `image_size` baru `0xa572000` ≤ ruang ABL `0xea43000`; boot image **193 646 592 B ≤ `boot_b`
+201 326 592 B (sisa 7,3 MiB)**: PASS. Payload maksimum B5 = 119 MiB; 128 MiB sesi 10 tidak muat.
+
+### Simulasi jalur boot (`tools/mode_b_sim.py`, `tests/test_mode_b.py`)
+
+| Skenario | Hasil |
+| --- | --- |
+| B5, power-on biasa / charger | Android / charger, langsung |
+| B5, Vol+ → menu, timeout atau entri Android | reset → boot normal → **Android** (tidak loop) |
+| B5, Vol+ → iPadOS tanpa partisi root | panic → restart → **Android** |
+| B5 ditolak ABL | fastboot (slot lain tidak diandalkan) |
+| Semua kombinasi B5 (tombol × charger × pilihan menu × root × diterima) | tidak ada loop; fastboot (Vol−) selalu tercapai |
+| Image MODE A di flash | MENU → reset → MENU: **loop** (desain yang ditolak, direproduksi) |
+
+Konsekuensi yang harus diterima pemilik: dengan B5 terpasang, recovery stock hanya bisa lewat entri menu
+"Android recovery" (butuh jalur kembali ke Linux, belum ditulis) atau dengan memulihkan boot stock dari fastboot.
+
+### Prasyarat sebelum B5 boleh disentuh di tablet (belum ada yang terpenuhi)
+
+1. ABL yang **terpasang** (OS4.0.8.0) diperiksa ulang dengan aturan di atas (OTA OS4.0.8.0 atau dump read-only).
+2. Salinan `boot_b` **yang sedang terpasang** (OS4.0.8.0), bukan OS2.0.16, sebagai jalan pulang lewat fastboot: butuh
+   OTA yang sama atau akses root; tablet tidak di-root.
+3. Shim assembly ditulis dan lulus `tests/test_mode_b.py` di emulasi (QEMU, x0 = DTB Android stock).
+4. Uji RAM: `fastboot boot` image B5 (tanpa menulis) — butuh `max-download-size` ≥ 193 646 592 B, dibaca dengan
+   `fastboot getvar` (read-only) saat pemilik sendiri membawa tablet ke fastboot.
+5. Baru setelah itu menulis `boot_b` sekali, dengan persetujuan pemilik.
+
+## GPT dan partisi `ipados` (sesi 12)
+
+Read-only, tanpa root: `/dev/block/by-name` terbaca (nama → nomor), ukuran/offset tidak (SELinux menolak
+`/sys/block/*/size`, `/proc/partitions`). Rekaman lama (`board.toml`): `userdata` = `sda34`, LBA 4 KiB
+`0x293000..0x3b037fa` (242,4 GB). `sda34` adalah nomor tertinggi di LUN 0 dan awalnya sama dengan unit 128 GB (hanya
+ujungnya yang membesar): `userdata` mengisi LUN sampai habis. **Ruang kosong di akhir LUN 0 tidak terukur** (butuh root
+atau dump GPT); bila ada, paling banyak sisa perataan, bukan GB.
+
+| Kandidat root iPadOS (butuh 9 457 106 944 B, image root sesi 1) | Hasil |
+| --- | --- |
+| Ruang kosong LUN 0 | tidak terukur; hampir pasti ≈ 0 |
+| `super` (grup `qti_dynamic_partitions` maks 9 122 611 200 B; isi OS2.0.16 6 282 592 256 B) | sisa ≈ 2,65 GiB, dipakai Virtual A/B saat OTA: **tidak** |
+| `rawdump`, `cust`, `rescue`, `bk0x`, `logdump`, `minidump` | kecil / dipakai Xiaomi; ukuran tak terbaca tanpa root: **tidak** layak |
+| File di `userdata` | f2fs + enkripsi metadata/FBE: blok mentah ciphertext: **tidak** |
+| USB-C | butuh driver host USB di XNU port ini: **tidak ada** |
+| Mengecilkan `userdata` | satu-satunya jalan; menghapus data Android: **dilarang di sesi ini** |
+
+Status partisi `ipados`: **TIDAK ADA dan tidak bisa dibuat tanpa menghapus data Android.** B5 tanpa root hanya
+memberi menu; entri iPadOS berakhir panic → Android.

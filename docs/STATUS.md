@@ -1,13 +1,35 @@
-# Status verifikasi — hakios-pipa (sesi 11, 24 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 12, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
 Dua status terpisah, tidak pernah disamakan:
 
 - **OFFLINE CHECKS** (`scripts/build.sh`, exit code): PASS — lihat `docs/build-summary-2026-11-23-s3.txt`.
-- **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — sesi 11: hanya image root partisi `ipados` yang belum ada
+- **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — sesi 11–12: hanya image root partisi `ipados` yang belum ada
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 12 (offline + adb read-only; tidak ada boot, flash, repartisi, atau perubahan slot; data Android utuh)
+
+MODE B rute B5: **TERVALIDASI OFFLINE, BELUM SIAP UNTUK TABLET.** Rincian dan bukti: [MODE-B.md](MODE-B.md), bagian sesi 12.
+
+| Pemeriksaan | Hasil | Bukti |
+| --- | --- | --- |
+| Payload | `patches/unixnu-pipa/0012`: `size_mib` 128 → **112**. Isi tetap sama (kernel `1d02cbe8…` setelah probe, ADT, GPU addon `244cc6b8…`, trust cache, seed Data; 65 887 336 B). `payload.img` 117 440 512 B `f5142b35…`; `payload_check.py` **PASS** | `~/hakios/evidence/mode-b-s12.hxWP/payload-check.txt` |
+| Boot image MODE A v5 | 120 246 272 B `69525e67…`; **IMAGE CONSISTENT** (dengan `--derive`); ABL layout **PASS** | `~/hakios/evidence/mode-b-s12.hxWP/image-consistency.txt`, `abl-mode-a.txt` |
+| Readiness | **NO, 1 syarat**: image root partisi `ipados` | `~/hakios/evidence/mode-b-s12.hxWP/readiness.txt` |
+| ABL (biner OTA OS2.0.16) | region kernel 256 MiB dari XBL `uefiplat.cfg`; aturan penempatan + batas `image_size` dibaca dari LinuxLoader; boot stock PASS dengan ruang 234,3 MiB | `tools/abl_layout.py`, `~/hakios/evidence/mode-b-s12.hxWP/abl-stock.txt` |
+| Pemilih B5 | dari `/chosen/bootargs` ABL (`force_normal_boot=1` / `mode=charger` → Android tanpa diubah; recovery → menu, initrd = payload). Model + tes, termasuk DTB Android stock asli | `tools/b5_shim_model.py`, `tests/test_mode_b.py` |
+| Anggaran B5 | boot image 193 646 592 B ≤ `boot_b` (sisa 7,3 MiB), `image_size` 0xa572000 ≤ 0xea43000: **PASS**; payload maks 119 MiB | `~/hakios/evidence/mode-b-s12.hxWP/b5-budget.txt` |
+| Simulasi | B5 tanpa loop di semua kombinasi; fastboot selalu tercapai; loop image MODE A di flash direproduksi | `tools/mode_b_sim.py` |
+| GPT | read-only `by-name` (tanpa root): `userdata` = `sda34`, partisi terakhir LUN 0; ukuran/offset tidak terbaca (SELinux). Ruang kosong LUN 0 **tidak terukur**, hampir pasti ≈ 0 | `~/.hakios-private/gpt-sysfs.*` (privat) |
+| Partisi `ipados` | **tidak ada; tidak bisa dibuat tanpa mengecilkan `userdata`** (super sisa ≈ 2,65 GiB < root 9,46 GB) | MODE-B.md |
+| Artefak dipertahankan | kernel tahap B `1d02cbe8…`, Turnip/AdrenoMetal/addon dari CI 45384828742, payload v4 (`payload-v4.*`) dan v5 (`~/hakios/payload-v5.J1ox`) | lokal |
+| Suite tes | 158 tes OK (4 dilewati: input tidak ada) | `python3 -m unittest discover -s tests` |
+
+**Blocker MODE B**: (1) shim assembly belum ditulis; (2) ABL OS4.0.8.0 yang terpasang belum diperiksa; (3) tidak ada
+salinan `boot_b` OS4.0.8.0 untuk pemulihan; (4) `max-download-size` belum dibaca; (5) recovery stock hanya lewat jalur
+kembali ke Linux (belum ada). **Blocker iPadOS**: partisi root `ipados` — keputusan pemilik (data Android).
 
 ## Sesi 11 (WSL2 + GitHub Actions; tidak ada boot, flash, repartisi, atau perubahan slot)
 
