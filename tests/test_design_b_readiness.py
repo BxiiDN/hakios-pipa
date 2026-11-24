@@ -17,7 +17,7 @@ class Readiness(unittest.TestCase):
     def test_not_ready_today(self):
         self.assertEqual(r.main([]), 1)
         self.assertEqual(r.check_consent(ROOT / 'plans/ipados-shrink-userdata.json')[0], 'BLOCKED')
-        self.assertEqual(r.check_writer()[0], 'MISSING')
+        self.assertEqual(r.check_writer()[0], 'PASS')
         for f in (r.check_backup, r.check_restore, r.check_gpt):
             self.assertEqual(f(None)[0], 'MISSING')
         self.assertEqual(r.check_backup(None, waived=True)[0], 'WAIVED')

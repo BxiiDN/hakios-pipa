@@ -6,10 +6,10 @@ diff --git a/board.toml b/board.toml
  # the 8 GB unit's boot_b (0xC000000 = 201 326 592, fastboot getvar 2026-11-16); ABL refuses a boot image larger than the
  # partition even for `fastboot boot` and then marks the slot unbootable. The payload uses ~66 MB (session 10).
 -size_mib = 128
-+# 112, not 128 (hakios-pipa session 12, docs/MODE-B.md B5): the same volume must also fit beside the stock Android kernel
-+# (52 826 128 B), its ramdisk (20 159 971 B) and the firmware in boot_b; 4 KiB pages leave 119.4 MiB. The files take
-+# 65 887 336 B (62.8 MiB), so 112 keeps a 49 MiB margin.
-+size_mib = 112
++# 96, not 128 (hakios-pipa session 19, docs/MODE-B.md B5): the same volume must also fit beside the installed port ROM's
++# kernel (50 040 856 B) and ramdisk (35 151 423 B) and the firmware in boot_b: 107.7 MiB are left there. The files take
++# 65 887 336 B (62.8 MiB); 96 keeps 33 MiB inside the volume and about 11 MiB of boot_b free for a larger kernel.
++size_mib = 96
  loader = "firmware"
  title = "Xiaomi Pad 6 (iPadOS 17.7.11)"
  dram_size = "0x200000000"

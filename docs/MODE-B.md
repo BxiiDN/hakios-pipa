@@ -154,3 +154,19 @@ atau dump GPT); bila ada, paling banyak sisa perataan, bukan GB.
 
 Status partisi `ipados`: **TIDAK ADA dan tidak bisa dibuat tanpa menghapus data Android.** B5 tanpa root hanya
 memberi menu; entri iPadOS berakhir panic → Android.
+
+## Sesi 19: B5 dibangun dan diuji (offline; belum di tablet)
+
+- Shim `package/b5-shim` (`entry.S` + `shim.c`, `build-shim.py`): 10 137 B, independen posisi (di-link pada 0 dan
+  0x7ff000 → biner identik, tanpa relokasi). Paritas: `shim.c` di host = `b5_shim_model.py` (termasuk DTB stock).
+  **QEMU `virt`** (biner asli, `/chosen` dari `-append`/`-initrd` seperti ABL): `force_normal_boot=1` dan
+  `mode=charger` → kode Image sendiri, DTB tak tersentuh; recovery → menu dengan `linux,initrd-start/-end` = payload
+  tepat; recovery tanpa initrd → Android (`tests/test_b5_shim_qemu.py`).
+- `tools/b5_compose.py`: Image Android (code0 → `b shim`; code0 asli `b` direlokasi, stub EFI `add` disalin) + shim +
+  BootShim+FD (dari kernel MODE A) + payload; `image_size` dinaikkan; ramdisk/header stock tetap. Menolak bila ABL akan
+  menolak.
+- Ramdisk ROM port 35 151 423 B (OTA resmi 19,2 MiB) → payload diturunkan ke **96 MiB** (`unixnu-pipa/0012`; isi 62,8 MiB).
+- Image B5 nyata dari `boot.img` paket + MODE A v9 + payload v9: **189 026 304 B** (`1901c2fa…`), sisa 12,3 MB di
+  `boot_b`, ABL LAYOUT PASS; isi diverifikasi byte demi byte. Basis yang lebih tepat: `boot_b` terpasang (kernel N0) dari
+  dump USB — komposisi diulang dengan itu.
+- Image MODE A v9 (FD `da68d465…`, Tools lengkap, payload 96 MiB): `a1ce6a26…`, IMAGE CONSISTENT, payload_check PASS.

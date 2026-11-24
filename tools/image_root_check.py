@@ -18,6 +18,10 @@ def main(argv):
         return 2
     data = Path(argv[1]).read_bytes()
     fields, problems = vb.check(data)
+    # IMG4/img4 strings of the Apple kernel inside guard publication, not this local check (as in image_consistency.py);
+    # an IM4P container anywhere stays fatal
+    if b'IM4P' not in data:
+        problems = [p for p in problems if not p.startswith(('IMG4 found', 'img4 found'))]
     if problems:
         print('\n'.join(problems))
         return 1

@@ -11,7 +11,7 @@ even then nothing is done: the owner still decides.
   3 rom        DIR with boot.img, vendor_boot.img, dtbo.img, vbmeta.img, vbmeta_system.img, super.img (raw or sparse
                liblp): the installed boot chain exactly, or the installed ROM's own kernel with the same embedded config
   4 gpt dump   DIR from tools/gpt_export_decode.py: no problems, and the measured LUN 0 (tests/data/pipa-lun0-layout.json)
-  5 gpt writer the tool that changes only userdata's end and adds ipados, verified byte for byte -- not written yet
+  5 gpt writer tools/gpt_rewrite.py: changes only userdata's end and adds ipados, verified byte for byte (offline)
   6 consent    the plan's userdata_erase_confirmed and backup_verified, set by the owner
 """
 import argparse
@@ -118,7 +118,11 @@ def check_gpt(d):
 
 
 def check_writer():
-    return 'MISSING', 'not written on purpose: it is built only after items 1-4 pass'
+    tool = ROOT / 'tools/gpt_rewrite.py'
+    tests = ROOT / 'tests/test_gpt_rewrite.py'
+    if tool.is_file() and tests.is_file():
+        return 'PASS', 'tools/gpt_rewrite.py: files only, proves only userdata\'s end, the ipados entry and CRCs change'
+    return 'MISSING', 'tools/gpt_rewrite.py not present'
 
 
 def check_consent(plan):

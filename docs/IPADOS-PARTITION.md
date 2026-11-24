@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–17)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–19)
 
 **Status (24 Nov, terukur di tablet): LUN 0 tidak punya ruang kosong; Rancangan A tidak mungkin. Belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -130,7 +130,7 @@ lagi: sekarang data Android harus aman, jadi backup di atas dijalankan pemilik (
 | Fakta | Nilai |
 | --- | --- |
 | ROM | custom/port dari Xiaomi Pad 8/8 Pro (keterangan pemilik); `OS4.0.8.0.XPZCNXM`, Android 17; tidak ada rilis resmi pipa dengan versi ini |
-| Kernel | `5.10.241 #18 SMP PREEMPT Thu Oct 29 19:56:25 CST 2026` (`ro.kernel.version` tetap `4.19`); `CONFIG_IKCONFIG_PROC=y` |
+| Kernel | **koreksi sesi 18:** `4.19.325-cip136-st20-N0-kernel++` (`/proc/version`); `uname -r` 5.10.241 adalah spoof. Tercatat semula: `5.10.241 #18 SMP PREEMPT Thu Oct 29 19:56:25 CST 2026` (`ro.kernel.version` tetap `4.19`); `CONFIG_IKCONFIG_PROC=y` |
 | Driver yang dibutuhkan pembaca | built-in: UFS QCOM, configfs, mass storage gadget, initrd gzip/lz4, pstore/ramoops, msm_poweroff; `CONFIG_DEVTMPFS` tidak ada (pembaca membuat node sendiri) |
 | Boot | `ro.boot.dtb_idx=0`, `ro.boot.dtbo_idx=9`, `verifiedbootstate=orange`, `ro.boot.vbmeta.digest` kosong (AVB tidak bisa menjamin image) |
 | Slot | `current-slot:b`; b: successful=yes, unbootable=no, retry 6; **a: successful=no** (bukan cadangan yang terbukti) |
@@ -148,7 +148,7 @@ diakhiri `fastboot reboot`; pembaca kini mematikan tablet setelah kabel USB dica
 ### Preflight image pembaca lama: TIDAK LULUS
 
 Image `a7fa37bb…` memakai kernel 4.19 dan DTB dasar kona OS2.0.16 (`board-id <0 0>`): ABL wajib menerapkan `dtbo_b` ROM
-port (dibuat untuk DTB 5.10) dan, bila overlay gagal, menghentikan boot (ABL `.text 0x17394`). Ditandai
+port (dari ROM lain, bukan pasangan DTB dasar OS2.0.16) dan, bila overlay gagal, menghentikan boot (ABL `.text 0x17394`). Ditandai
 `DO-NOT-USE.txt`, tidak dihapus. `tools/rom_match.py` menolaknya (banner, uname -v, config tertanam).
 
 ### Pembaca yang disesuaikan (offline, siap begitu image ROM port ada)
@@ -178,7 +178,7 @@ build firmware + persetujuan RAM-boot.
 | --- | --- | --- |
 | iPadOS (kernel tahap B, payload, GPU addon, DarwinBoot) | tidak: jalan dari firmware sendiri, DTB `pipa.dtb` | tetap |
 | MODE A (`fastboot boot`) | hampir tidak (DTB khusus papan); `dtbo_b` port belum terbukti dilewati | uji RAM diperlukan |
-| B5 (menu di `boot_b`) | ya: shim masuk ke kernel 5.10 port; pemilih `bootargs` cocok dengan ABL OS2.0.16 (tanpa bootconfig) | layak, tapi butuh `boot.img` port asli dan diulang tiap update ROM port |
+| B5 (menu di `boot_b`) | ya: shim masuk ke kernel port (4.19.325); pemilih `bootargs` cocok dengan ABL OS2.0.16 (tanpa bootconfig) | layak, tapi butuh `boot.img` port asli dan diulang tiap update ROM port |
 | Partisi `ipados` | tidak (GPT) | masalah ruang tetap sama |
 | Pemulihan | ya: tanpa paket ROM port tidak ada image `boot_b` untuk dipulihkan | **blocker** |
 
@@ -193,7 +193,7 @@ diperiksa magic `ANDROID!` serta banner kernelnya. Hasil:
 | Temuan | Isi | Cocok dengan ROM terpasang? |
 | --- | --- | --- |
 | `Downloads\boot.img`, `vendor_boot.img`, `dtbo.img` (19 Nov 06:58, ukuran = partisi: dump) | boot v3, kernel **4.19.325-perf+**; vendor_boot 3 DTB (`msm-id 0x164`); dtbo 13 entri | **Tidak**: `rom_match.py` FAIL (banner, `uname -v`, config tertanam). Kemungkinan dump ROM custom sebelumnya |
-| Paket ROM port Pad 8 (kernel 5.10.241) | — | **tidak ditemukan** |
+| Paket ROM port | — | tidak ditemukan saat itu; ditemukan sesi 18 (`HyperOS4.0_pipa_port-from-yupei-beta`) |
 
 Salinan privat (tidak di Git): `~/.hakios-private/port-rom-downloads.*` (SHA-256 sama dengan aslinya: `56a71abe…`,
 `6dabbe97…`, `fbbe0fab…`). File itu **bukan** salinan pemulihan untuk ROM sekarang; jangan di-flash.
@@ -329,3 +329,46 @@ langkah ini.
 Fastboot (ABL) tidak tersentuh di langkah mana pun. Belum diketahui: apakah ABL mengizinkan `fastboot flash partition:0`
 tanpa critical-unlock pada perangkat ini (string ABL: "Flashing is not allowed for Critical Partitions") — dibaca
 dengan `getvar` sebelum #5 dibuat.
+
+## 12. Sesi 18–19: set pemulihan, alat USB read-only, penulis GPT
+
+### Set pemulihan ROM terpasang
+
+- Paket porter `HyperOS4.0_pipa_port-from-yupei-beta` (salinan privat + SHA-256): `boot`/`vendor_boot`/`dtbo`/`vbmeta`/
+  `vbmeta_system` dan `super.img` sparse yang mengembang tepat ke 9 126 805 504 B (liblp, `system/system_ext/product/
+  vendor/odm` a/b). Skrip porter (`FlashLinux.sh`) memakai `set_active b`, flash firmware `*_ab`, `super`, opsional erase
+  `metadata`/`userdata` — tidak menulis GPT.
+- `boot.img` paket = kernel ROM `4.19.325-cip135-st19`; terpasang `cip136-st20-N0-kernel++` (config tertanam sama, build
+  lain). Pemulihan dengan paket menghidupkan Android dengan kernel ROM; kernel N0 harus dipasang ulang dari paketnya sendiri
+  (tidak ditemukan di PC) — atau `boot_b` yang terpasang diambil persis lewat alat USB di bawah.
+
+### Alat USB read-only (Tools di firmware MODE A, `patches/unixnu/0007`)
+
+"USB disk: LUN 0 (read only)" / "USB disk: boot LUN (read only)": disk (dicari dari nama partisi `userdata` / `boot_b`)
+diserahkan ke `UsbMsdDxe` lewat BlockIo pembungkus: `ReadBlocks` diteruskan, `WriteBlocks` = `EFI_WRITE_PROTECTED`,
+`Media->ReadOnly = TRUE`; tidak ada panggilan tulis/flush ke disk (`test_gpt_view.py`). Di PC (Administrator):
+`scripts/windows/dump-pipa-usb.ps1` (disk dibuka `FileAccess.Read`, hanya BusType USB): boot LUN utuh (±2 GiB) dan
+LUN 0 dari byte 0 sampai awal `userdata` (±10,3 GiB: GPT, `super`, `persist`, …) + 5 sektor terakhir. Lalu
+`tools/usb_dump_check.py` memeriksa SHA-256, kedua GPT, tata letak terukur, `super` liblp, dan `rom_match.py` → `recovery/`.
+
+### Penulis GPT (`tools/gpt_rewrite.py`, hanya berkas)
+
+Dari sektor GPT asli: `userdata` berakhir di 56 637 183, entri `ipados` 56 637 184..61 880 314 (tipe APFS, GUID uuid5
+dari GUID disk), CRC entri + kedua header dihitung ulang. Bukti di alat: kedua GPT baru sah, cadangan = primer, dan setiap
+byte berbeda berada di ujung `userdata`, slot entri baru, atau field CRC (53 byte per salinan pada LUN 0 terukur);
+MBR pelindung wajib `55 AA` + tipe `0xEE` (pemeriksaan ABL `.text 0x28140`, yang juga meminta ukuran > 2 blok dan header
+di blok 1 — tata letak `gpt_both0.bin` = sektor primer + sektor cadangan). 6 tes. `image_root_check.py` pada image MODE A:
+GPT sekarang → BLOCKED (tidak ada `ipados`), GPT baru → PASS.
+
+### Image root iPadOS
+
+`userdata-root.img` 9 457 106 944 B, SHA-256 `f7c29dc9…` = catatannya; objek `OS.vroot`/`SystemOS.vroot` = kebijakan
+`policy.json` (`95e446dc…`) dan kunci owner (`e8ae7ddf…`) yang tertanam di kernel tahap B `1d02cbe8…`. Muat di
+`ipados` (21,48 GB). Akan di-flash ke `ipados` (sparse FILL), bukan ke `userdata`.
+
+### Yang masih terbuka untuk iPadOS (bukan Android)
+
+Patch `0002` mematikan `sheng-data-persist=2` dan entri Install karena dulu store Data ada di `userdata`. Dengan root di
+`ipados`, store ada di ujung `ipados` (driver menolak `userdata`), jadi keduanya boleh kembali — tetapi cmdline payload
+sudah 974 dari ±1000 byte: `sheng-data-persist=2` (21 B) muat, entri inisialisasi Data sekali (`sheng-data-reset=1`) tidak
+tanpa membuang argumen diagnostik. Tanpa ini iPadOS boot dengan Data volatil (tidak tersimpan). Keputusan + uji hardware.
