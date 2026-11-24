@@ -9,6 +9,16 @@ Dua status terpisah, tidak pernah disamakan:
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
 
+## Sesi 18 (Rancangan B dipersiapkan; belum ada eksekusi)
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| **Koreksi kernel** | kernel terpasang = `4.19.325-cip136-st20-N0-kernel++` (`/proc/version`, header config 4.19.325); `uname -r` 5.10.241 adalah spoof. Klaim "kernel 5.10" di sesi 14–17 salah. `rom_match.py` kini memakai `/proc/version` |
+| Paket ROM port (`HyperOS4.0_pipa_port-from-yupei-beta`) | disalin privat + SHA-256 (25 file, 0 selisih); boot/vendor_boot/dtbo/vbmeta/vbmeta_system + `super.img` sparse = 9 126 805 504 B (liblp, system/system_ext/product/vendor/odm a/b); `boot.img` = kernel ROM `cip135-st19` (config identik), bukan kernel N0 yang terpasang |
+| Backup data pribadi | **WAIVED** oleh pemilik (`backup_waived_by_owner`); `userdata_erase_confirmed` tetap `false` |
+| Alat baru | plugin "USB disk: LUN 0 / boot LUN (read only)" (BlockIo read-only di atas UsbMsdDxe), `scripts/windows/dump-pipa-usb.ps1`, `tools/usb_dump_check.py`; firmware lokal PASS (FD `da68d465…`) |
+| Prasyarat B | 1–2 WAIVED, 3 PASS (ROM dengan kernelnya sendiri), 4 GPT dump MISSING, 5 penulis GPT MISSING, 6 BLOCKED |
+
 ## Sesi 17 (persiapan Rancangan B; adb read-only; tidak ada backup, boot, flash, atau tulisan)
 
 | Pemeriksaan | Hasil |

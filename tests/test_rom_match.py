@@ -72,6 +72,19 @@ class Kernel(unittest.TestCase):
     def test_other_config_fails(self):
         self.assertTrue(any('config' in t for t in fails(self.run_check(kernel(config=CONFIG + b'CONFIG_X=y\n')))))
 
+    def test_printf_format_before_the_banner_is_skipped(self):
+        k = bytearray(kernel())
+        k[0x40:0x40] = b'Linux version %s (%s) codec registered (%s)\0'
+        self.assertEqual(fails(self.run_check(bytes(k))), [])
+
+    def test_proc_version_is_the_real_banner(self):
+        k = kernel(release='4.19.325-cip136-st20-N0-kernel++', version='#18 SMP PREEMPT Thu Oct 29 19:56:25 CST 2026')
+        pv = 'Linux version 4.19.325-cip136-st20-N0-kernel++ (builder@host) (clang) #18 SMP PREEMPT Thu Oct 29 19:56:25 CST 2026\n'
+        ok = rom_match.check(boot=boot_v4(k), config=gzip.compress(CONFIG), proc_version=pv)
+        self.assertEqual(fails(ok), [])
+        other = kernel(release='4.19.325-cip135-st19-pipa-hyperos4-perf+')      # same config, another build
+        self.assertTrue(fails(rom_match.check(boot=boot_v4(other), config=gzip.compress(CONFIG), proc_version=pv)))
+
     def test_no_ikconfig_fails(self):
         k = kernel().replace(b'IKCFG_ST', b'XXXXXXXX')
         self.assertTrue(any('IKCONFIG' in t for t in fails(self.run_check(k))))

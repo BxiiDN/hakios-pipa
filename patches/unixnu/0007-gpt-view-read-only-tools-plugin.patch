@@ -1,9 +1,9 @@
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptScan.h b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.h
 new file mode 100644
-index 0000000..36ce98d
+index 0000000..d6d100a
 --- /dev/null
 +++ b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.h
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,103 @@
 +/** @file
 +  Read-only GPT survey of one disk, from buffers the caller has already read: the primary header (LBA 1), its partition
 +  entry array and the backup header (the disk's last LBA). Pure C with no firmware calls, so the same file is built into
@@ -87,6 +87,14 @@ index 0000000..36ce98d
 +  GPT_SCAN_SUMMARY  *Summary
 +  );
 +
++// 1 when the entry array (as read for Summary) holds a partition named Name (ASCII), else 0.
++int
++GptScanHasName (
++  const GS_U8             *Entries,
++  const GPT_SCAN_SUMMARY  *Summary,
++  const char              *Name
++  );
++
 +// One line of text (NUL-terminated ASCII, at most Cap - 1 characters) for line Index of the summary; returns 0 past the
 +// last line. Sizes are in MiB, rounded down.
 +int
@@ -101,10 +109,10 @@ index 0000000..36ce98d
 +#endif
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptScan.c b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.c
 new file mode 100644
-index 0000000..5fae416
+index 0000000..ceb039f
 --- /dev/null
 +++ b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.c
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,347 @@
 +/** @file
 +  Read-only GPT survey (GptScan.h). Byte-order explicit (little endian, as GPT is); no library calls.
 +
@@ -316,6 +324,36 @@ index 0000000..5fae416
 +    Summary->Flags |= GPT_SCAN_BAD_BACKUP;
 +  }
 +  return Summary->Flags;
++}
++
++int
++GptScanHasName (
++  const GS_U8             *Entries,
++  const GPT_SCAN_SUMMARY  *Summary,
++  const char              *Name
++  )
++{
++  GS_U32  I;
++  GS_U32  J;
++
++  for (I = 0; I < Summary->EntryCount; I++) {
++    const GS_U8  *E = Entries + (GS_U64)I * Summary->EntrySize;
++
++    for (J = 0; J < GPT_SCAN_NAME_CHARS; J++) {
++      GS_U16  C = (GS_U16)(E[56 + 2 * J] | E[57 + 2 * J] << 8);
++
++      if (C != (GS_U8)Name[J]) {
++        break;
++      }
++      if (C == 0) {
++        return 1;
++      }
++    }
++    if ((J == GPT_SCAN_NAME_CHARS) && (Name[J] == 0)) {
++      return 1;
++    }
++  }
++  return 0;
 +}
 +
 +static unsigned
@@ -796,15 +834,18 @@ index 0000000..857d781
 +};
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c
 new file mode 100644
-index 0000000..ba309cf
+index 0000000..5f926d1
 --- /dev/null
 +++ b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c
-@@ -0,0 +1,509 @@
+@@ -0,0 +1,776 @@
 +/** @file
 +  "GPT (read only)" in UniXNU's Tools menu: every whole disk's GPT, summarised on the panel and in the firmware log, so the
 +  owner can see whether UFS LUN 0 has room for an `ipados` partition (hakios-pipa docs/IPADOS-PARTITION.md, design A)
 +  without any change to the disk. "GPT export (QR)": LUN 0's raw GPT sectors (protective MBR, primary header and entries,
-+  backup entries and header) as OneSend QR frames, a byte-exact copy for recovery (section 11).
++  backup entries and header) as OneSend QR frames, a byte-exact copy for recovery (section 11). "USB disk: ... (read
++  only)": one UFS LUN offered to the PC as a USB mass storage disk through Qualcomm's UsbMsdDxe, behind a read-only
++  BlockIo of this driver (its WriteBlocks always answers EFI_WRITE_PROTECTED, it never calls the disk's WriteBlocks), so
++  the PC can copy the installed boot chain and the GPT for recovery (section 12).
 +
 +  Read only by construction: the only storage call is EFI_BLOCK_IO_PROTOCOL.ReadBlocks (primary header at LBA 1, its entry
 +  array, the backup header at the last LBA) on handles whose media is not a logical partition. No WriteBlocks, FlushBlocks,
@@ -1276,6 +1317,252 @@ index 0000000..ba309cf
 +  return EFI_SUCCESS;
 +}
 +
++//
++// Qualcomm's USB mass storage device protocol (QcomPkg Include/Protocol/EFIUsbMsd.h), declared here so UniXNUPkg does not
++// depend on QcomPkg; UsbMsdDxe in the pipa firmware volume installs it.
++//
++typedef struct _GPT_VIEW_USB_MSD  GPT_VIEW_USB_MSD;
++struct _GPT_VIEW_USB_MSD {
++  UINT32      Revision;
++  EFI_STATUS  (EFIAPI *AssignBlkIoHandle)(GPT_VIEW_USB_MSD *This, EFI_BLOCK_IO_PROTOCOL *BlkIo, UINT32 Lun);
++  EFI_STATUS  (EFIAPI *QueryMaxLun)(GPT_VIEW_USB_MSD *This, UINT8 *Count);
++  EFI_STATUS  (EFIAPI *EventHandler)(GPT_VIEW_USB_MSD *This);
++  EFI_STATUS  (EFIAPI *StartDevice)(GPT_VIEW_USB_MSD *This);
++  EFI_STATUS  (EFIAPI *StopDevice)(GPT_VIEW_USB_MSD *This);
++};
++STATIC EFI_GUID  mUsbMsdProtocolGuid = { 0xC8591FAF, 0xDBCC, 0x479E, { 0x9E, 0xF2, 0xFD, 0x08, 0x5B, 0xC3, 0x7B, 0xC7 } };
++
++#define RO_BLOCK_IO_SIGNATURE  SIGNATURE_32 ('G','V','R','O')
++
++typedef struct {
++  UINT32                 Signature;
++  EFI_BLOCK_IO_PROTOCOL  BlockIo;
++  EFI_BLOCK_IO_MEDIA     Media;
++  EFI_BLOCK_IO_PROTOCOL  *Lower;
++} RO_BLOCK_IO;
++
++#define RO_FROM_BLOCK_IO(a)  CR (a, RO_BLOCK_IO, BlockIo, RO_BLOCK_IO_SIGNATURE)
++
++STATIC RO_BLOCK_IO  mRo;
++
++STATIC
++EFI_STATUS
++EFIAPI
++RoReset (
++  IN EFI_BLOCK_IO_PROTOCOL  *This,
++  IN BOOLEAN                Extended
++  )
++{
++  (VOID)This;
++  (VOID)Extended;
++  return EFI_SUCCESS;                // the disk itself is not reset from here
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++RoReadBlocks (
++  IN  EFI_BLOCK_IO_PROTOCOL  *This,
++  IN  UINT32                 MediaId,
++  IN  EFI_LBA                Lba,
++  IN  UINTN                  BufferSize,
++  OUT VOID                   *Buffer
++  )
++{
++  RO_BLOCK_IO  *Ro;
++
++  (VOID)MediaId;
++  Ro = RO_FROM_BLOCK_IO (This);
++  return Ro->Lower->ReadBlocks (Ro->Lower, Ro->Lower->Media->MediaId, Lba, BufferSize, Buffer);
++}
++
++// The whole point of this BlockIo: nothing the PC sends is ever written.
++STATIC
++EFI_STATUS
++EFIAPI
++RoRefuseWrite (
++  IN EFI_BLOCK_IO_PROTOCOL  *This,
++  IN UINT32                 MediaId,
++  IN EFI_LBA                Lba,
++  IN UINTN                  BufferSize,
++  IN VOID                   *Buffer
++  )
++{
++  (VOID)This;
++  (VOID)MediaId;
++  (VOID)Lba;
++  (VOID)BufferSize;
++  (VOID)Buffer;
++  return EFI_WRITE_PROTECTED;
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++RoFlush (
++  IN EFI_BLOCK_IO_PROTOCOL  *This
++  )
++{
++  (VOID)This;
++  return EFI_SUCCESS;                // nothing was written, nothing to flush
++}
++
++// The whole disk whose GPT holds a partition named Name.
++STATIC
++EFI_BLOCK_IO_PROTOCOL *
++FindDiskWith (
++  IN CONST CHAR8  *Name
++  )
++{
++  EFI_HANDLE             *Handles;
++  UINTN                  Count;
++  UINTN                  Index;
++  EFI_BLOCK_IO_PROTOCOL  *BlockIo;
++  EFI_BLOCK_IO_PROTOCOL  *Found;
++  GPT_SCAN_SUMMARY       Summary;
++  VOID                   *HeaderAlloc;
++  VOID                   *EntriesAlloc;
++  UINT8                  *Header;
++  UINT8                  *Entries;
++  UINTN                  Bytes;
++
++  Found = NULL;
++  if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &Count, &Handles))) {
++    return NULL;
++  }
++  for (Index = 0; (Index < Count) && (Found == NULL); Index++) {
++    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo)) ||
++        (BlockIo->Media == NULL) || BlockIo->Media->LogicalPartition || !BlockIo->Media->MediaPresent ||
++        (BlockIo->Media->BlockSize < 512) || (BlockIo->Media->BlockSize > 4096) || (BlockIo->Media->LastBlock < 64))
++    {
++      continue;
++    }
++    Header = ReadAligned (BlockIo, 1, BlockIo->Media->BlockSize, &HeaderAlloc);
++    if (Header == NULL) {
++      continue;
++    }
++    if ((GptScanHeader (Header, BlockIo->Media->BlockSize, BlockIo->Media->LastBlock + 1, Crc32, &Summary) &
++         (GPT_SCAN_NO_SIGNATURE | GPT_SCAN_BAD_HEADER)) == 0)
++    {
++      Bytes   = (UINTN)(((UINT64)Summary.EntryCount * Summary.EntrySize + Summary.BlockSize - 1) / Summary.BlockSize * Summary.BlockSize);
++      Entries = ReadAligned (BlockIo, Summary.EntriesLba, Bytes, &EntriesAlloc);
++      if (Entries != NULL) {
++        if (GptScanHasName (Entries, &Summary, Name)) {
++          Found = BlockIo;
++        }
++        FreePool (EntriesAlloc);
++      }
++    }
++    FreePool (HeaderAlloc);
++  }
++  FreePool (Handles);
++  return Found;
++}
++
++STATIC
++EFI_STATUS
++UsbDiskRun (
++  IN UNIXNU_MENU_PLUGIN_PROTOCOL    *This,
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL   *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT       *Content,
++  IN UNIXNU_MENU_PLUGIN_DRAW_STATUS DrawStatus,
++  IN CONST CHAR8                    *Partition,
++  IN CONST CHAR8                    *Label
++  )
++{
++  EFI_STATUS             Status;
++  GPT_VIEW_USB_MSD       *Msd;
++  EFI_BLOCK_IO_PROTOCOL  *Disk;
++  EFI_INPUT_KEY          Key;
++  UINTN                  Y;
++  UINTN                  Scale;
++  CHAR8                  Line[GPT_VIEW_LINE_CHARS];
++
++  if ((Gop == NULL) || (Content == NULL) || (Content->Width == 0) || (Content->Height == 0)) {
++    return EFI_INVALID_PARAMETER;
++  }
++  Fill (Gop, Content);
++  Scale = (Content->Width >= 72 * GPT_VIEW_GLYPH_WIDTH * 2) ? 2 : 1;
++  Y     = Content->Y;
++  Disk  = FindDiskWith (Partition);
++  if (EFI_ERROR (gBS->LocateProtocol (&mUsbMsdProtocolGuid, NULL, (VOID **)&Msd)) || (Msd == NULL) || (Disk == NULL)) {
++    DrawLine (Gop, Content, Y, (Disk == NULL) ? "USB disk: no disk with that partition" : "USB disk: no USB mass storage protocol",
++              Scale, mForeground);
++    gBS->Stall (3000 * 1000);
++    return EFI_NOT_FOUND;
++  }
++  ZeroMem (&mRo, sizeof (mRo));
++  mRo.Signature           = RO_BLOCK_IO_SIGNATURE;
++  mRo.Lower               = Disk;
++  CopyMem (&mRo.Media, Disk->Media, sizeof (mRo.Media));
++  mRo.Media.ReadOnly      = TRUE;
++  mRo.Media.WriteCaching  = FALSE;
++  mRo.BlockIo.Revision    = EFI_BLOCK_IO_PROTOCOL_REVISION;
++  mRo.BlockIo.Media       = &mRo.Media;
++  mRo.BlockIo.Reset       = RoReset;
++  mRo.BlockIo.ReadBlocks  = RoReadBlocks;
++  mRo.BlockIo.WriteBlocks = RoRefuseWrite;
++  mRo.BlockIo.FlushBlocks = RoFlush;
++
++  AsciiSPrint (Line, sizeof (Line), "USB disk (read only): %a, %lu MiB", Label,
++               (UINT64)(Disk->Media->LastBlock + 1) * Disk->Media->BlockSize / SIZE_1MB);
++  Y += DrawLine (Gop, Content, Y, Line, Scale, mAccent);
++  Y += DrawLine (Gop, Content, Y, "Writes are refused (EFI_WRITE_PROTECTED). On the PC: cancel any", Scale, mForeground);
++  Y += DrawLine (Gop, Content, Y, "'format disk' prompt; copy with scripts/windows/dump-pipa-usb.ps1.", Scale, mForeground);
++  Y += DrawLine (Gop, Content, Y, "Power: stop and return.", Scale, mForeground);
++  DEBUG ((DEBUG_ERROR, "GPTVIEW: USB disk %a read only, %lu blocks\n", Label, (UINT64)Disk->Media->LastBlock + 1));
++
++  Status = Msd->AssignBlkIoHandle (Msd, &mRo.BlockIo, 0);
++  if (!EFI_ERROR (Status)) {
++    Status = Msd->StartDevice (Msd);
++  }
++  if (EFI_ERROR (Status)) {
++    AsciiSPrint (Line, sizeof (Line), "USB disk: could not start (%r)", Status);
++    DrawLine (Gop, Content, Y, Line, Scale, mForeground);
++    gBS->Stall (3000 * 1000);
++    return Status;
++  }
++  if (DrawStatus != NULL) {
++    DrawStatus (This, 0, L"USB disk: read only -- Power: stop");
++  }
++  for ( ; ;) {
++    Msd->EventHandler (Msd);
++    if ((gST->ConIn != NULL) && !EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key)) &&
++        ((Key.UnicodeChar == CHAR_CARRIAGE_RETURN) || (Key.UnicodeChar == CHAR_LINEFEED) || (Key.ScanCode == SCAN_ESC)))
++    {
++      break;
++    }
++  }
++  Msd->StopDevice (Msd);
++  return EFI_SUCCESS;
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++UsbDiskLun0Run (
++  IN UNIXNU_MENU_PLUGIN_PROTOCOL    *This,
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL   *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT       *Content,
++  IN UNIXNU_MENU_PLUGIN_DRAW_STATUS DrawStatus
++  )
++{
++  return UsbDiskRun (This, Gop, Content, DrawStatus, "userdata", "LUN 0 (userdata, super, GPT)");
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++UsbDiskBootRun (
++  IN UNIXNU_MENU_PLUGIN_PROTOCOL    *This,
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL   *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT       *Content,
++  IN UNIXNU_MENU_PLUGIN_DRAW_STATUS DrawStatus
++  )
++{
++  return UsbDiskRun (This, Gop, Content, DrawStatus, "boot_b", "boot LUN (boot_b, vendor_boot_b, dtbo_b)");
++}
++
 +STATIC UNIXNU_MENU_PLUGIN_PROTOCOL  mGptViewPlugin = {
 +  UNIXNU_MENU_PLUGIN_PROTOCOL_SIGNATURE,
 +  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
@@ -1288,6 +1575,20 @@ index 0000000..ba309cf
 +  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
 +  L"GPT export (QR)",
 +  GptExportRun
++};
++
++STATIC UNIXNU_MENU_PLUGIN_PROTOCOL  mUsbLun0Plugin = {
++  UNIXNU_MENU_PLUGIN_PROTOCOL_SIGNATURE,
++  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
++  L"USB disk: LUN 0 (read only)",
++  UsbDiskLun0Run
++};
++
++STATIC UNIXNU_MENU_PLUGIN_PROTOCOL  mUsbBootPlugin = {
++  UNIXNU_MENU_PLUGIN_PROTOCOL_SIGNATURE,
++  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
++  L"USB disk: boot LUN (read only)",
++  UsbDiskBootRun
 +};
 +
 +EFI_STATUS
@@ -1305,9 +1606,13 @@ index 0000000..ba309cf
 +  if (EFI_ERROR (Status)) {
 +    return Status;
 +  }
-+  // one protocol instance per handle: the export tool gets a handle of its own
++  // one protocol instance per handle: every further tool gets a handle of its own
 +  Second = NULL;
-+  return gBS->InstallProtocolInterface (&Second, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mGptExportPlugin);
++  gBS->InstallProtocolInterface (&Second, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mGptExportPlugin);
++  Second = NULL;
++  gBS->InstallProtocolInterface (&Second, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mUsbLun0Plugin);
++  Second = NULL;
++  return gBS->InstallProtocolInterface (&Second, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mUsbBootPlugin);
 +}
 diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf
 new file mode 100644

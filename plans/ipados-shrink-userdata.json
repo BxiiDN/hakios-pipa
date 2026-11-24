@@ -1,6 +1,21 @@
-{"mode": "partition",
- "note": "docs/IPADOS-PARTITION.md design B, NOT approved: userdata's end moves down 20 GiB and 'ipados' takes the space. This ERASES all Android apps and files (userdata and metadata must be formatted: f2fs on dm-default-key cannot be shrunk offline without the device's keys). Stays FAIL until the owner sets userdata_erase_confirmed and backup_verified after a backup was restored once.",
+{
+ "mode": "partition",
+ "note": "docs/IPADOS-PARTITION.md design B: userdata's end moves down and 'ipados' (20 GiB) takes the space. This ERASES all Android apps and files (userdata and metadata are formatted: f2fs on dm-default-key cannot be shrunk offline). The owner waived the personal-data backup (2026-11-24); the original GPT dump and the installed ROM's recovery images stay mandatory. Stays FAIL until the owner sets userdata_erase_confirmed for the execution itself.",
  "userdata_erase_confirmed": false,
  "backup_verified": false,
- "resize": [{"partition": "userdata", "shrink_mib": 20480}],
- "create": [{"name": "ipados", "size_mib": 20480, "lun": "sda.bin", "after_resize": true}]}
+ "resize": [
+  {
+   "partition": "userdata",
+   "shrink_mib": 20480
+  }
+ ],
+ "create": [
+  {
+   "name": "ipados",
+   "size_mib": 20480,
+   "lun": "sda.bin",
+   "after_resize": true
+  }
+ ],
+ "backup_waived_by_owner": true
+}

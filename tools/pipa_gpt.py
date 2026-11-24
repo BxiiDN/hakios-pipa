@@ -227,9 +227,10 @@ def check_plan(plan, tables):
     for resize in plan.get('resize', []):
         name = resize.get('partition', '')
         if base_name(name) == 'userdata':
-            if not plan.get('userdata_erase_confirmed') or not plan.get('backup_verified'):
+            backup_ok = plan.get('backup_verified') is True or plan.get('backup_waived_by_owner') is True
+            if plan.get('userdata_erase_confirmed') is not True or not backup_ok:
                 say('FAIL', 'resize userdata: erases every Android app and file; needs userdata_erase_confirmed and '
-                            'backup_verified, both set by the owner after a backup was restored once as a test')
+                            'either backup_verified (a backup restored once as a test) or backup_waived_by_owner, set by the owner')
             else:
                 say('WARN', 'resize userdata: destructive and confirmed by the owner; not done by any tool here')
         else:

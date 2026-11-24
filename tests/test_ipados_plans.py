@@ -39,11 +39,14 @@ class Plans(unittest.TestCase):
         self.assertNotIn('writes', A)
 
     def test_design_b_fails_without_both_consents(self):
-        self.assertIs(B['userdata_erase_confirmed'], False)
+        self.assertIs(B['userdata_erase_confirmed'], False)        # execution not approved
         self.assertIs(B['backup_verified'], False)
+        self.assertIs(B['backup_waived_by_owner'], True)            # the owner's decision of 2026-11-24
         self.assertEqual(pipa_gpt.check_plan(json.loads(json.dumps(B)), [table(0)])[0], 'FAIL')
-        one = dict(json.loads(json.dumps(B)), userdata_erase_confirmed=True)
-        self.assertEqual(pipa_gpt.check_plan(one, [table(0)])[0], 'FAIL')
+        no_backup = dict(json.loads(json.dumps(B)), userdata_erase_confirmed=True, backup_waived_by_owner=False)
+        self.assertEqual(pipa_gpt.check_plan(no_backup, [table(0)])[0], 'FAIL')
+        confirmed = dict(json.loads(json.dumps(B)), userdata_erase_confirmed=True)
+        self.assertNotEqual(pipa_gpt.check_plan(confirmed, [table(0)])[0], 'PASS')   # still BLOCKED: no free space yet
 
 
 if __name__ == '__main__':

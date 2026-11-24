@@ -143,8 +143,17 @@ class ReadOnlySource(unittest.TestCase):
     def test_only_readblocks(self):
         code = re.sub(r'/\*.*?\*/|//[^\n]*', '', self.src, flags=re.S)
         self.assertIn('->ReadBlocks (', code)
-        for forbidden in ('WriteBlocks', 'FlushBlocks', 'DiskIo', 'SimpleFileSystem', 'EraseBlocks', 'SetVariable', 'ResetSystem'):
+        # no call that writes, anywhere: the disk's own WriteBlocks/FlushBlocks are never invoked
+        self.assertNotRegex(code, r'->\s*(WriteBlocks|FlushBlocks|WriteBlocksEx|FlushBlocksEx)\s*\(')
+        for forbidden in ('DiskIo', 'SimpleFileSystem', 'EraseBlocks', 'SetVariable', 'ResetSystem', 'BlockIo2'):
             self.assertNotIn(forbidden, code, forbidden)
+        # the only WriteBlocks this driver provides refuses every write
+        self.assertEqual(re.findall(r'\.WriteBlocks\s*=\s*(\w+)', code), ['RoRefuseWrite'])
+        body = code[code.index('RoRefuseWrite ('):]
+        body = body[:body.index('}')]
+        self.assertRegex(body, r'return EFI_WRITE_PROTECTED;')
+        self.assertNotRegex(body, r'Lower|ReadBlocks|->')
+        self.assertIn('Media.ReadOnly      = TRUE', code)
 
     def test_protocols_declared(self):
         protocols = set(re.findall(r'^\s*(g\w+ProtocolGuid)', self.inf, re.M))

@@ -20,7 +20,9 @@ class Readiness(unittest.TestCase):
         self.assertEqual(r.check_writer()[0], 'MISSING')
         for f in (r.check_backup, r.check_restore, r.check_gpt):
             self.assertEqual(f(None)[0], 'MISSING')
-        self.assertEqual(r.check_rom(None, None, None, None)[0], 'MISSING')
+        self.assertEqual(r.check_backup(None, waived=True)[0], 'WAIVED')
+        self.assertEqual(r.check_restore(None, waived=True)[0], 'WAIVED')
+        self.assertEqual(r.check_rom(None, None, None)[0], 'MISSING')
 
     def test_restore_record(self):
         d = Path(tempfile.mkdtemp())
@@ -32,7 +34,7 @@ class Readiness(unittest.TestCase):
     def test_rom_package_needs_every_image(self):
         d = Path(tempfile.mkdtemp())
         (d / 'boot.img').write_bytes(b'x')
-        level, text = r.check_rom(d, None, None, None)
+        level, text = r.check_rom(d, None, None)
         self.assertEqual(level, 'FAIL')
         self.assertIn('vendor_boot.img', text)
 

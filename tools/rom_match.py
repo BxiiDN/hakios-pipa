@@ -8,7 +8,9 @@ tablet without root (docs/IPADOS-PARTITION.md, session 14). Nothing is written a
 Device facts (adb, read-only): `cat /proc/config.gz`, `uname -r`, `uname -v`, `getprop ro.boot.dtbo_idx`, fastboot getvar
 hw-revision (the SoC version cell of qcom,msm-id). The installed port ROM carries no vbmeta digest (ro.boot.vbmeta.digest is
 empty), so AVB cannot vouch for an image; the kernel is identified instead by:
-  - its "Linux version" banner holds uname -r and uname -v exactly;
+  - its "Linux version" banner is the tablet's /proc/version exactly (--proc-version; preferred: on the installed port ROM
+    `uname -r` is spoofed -- it says 5.10.241 while /proc/version and the config say 4.19.325, 2026-11-24), or holds
+    uname -r and uname -v;
   - its embedded configuration (CONFIG_IKCONFIG: the gzip between IKCFG_ST and IKCFG_ED) is, decompressed, byte for byte the
     device's /proc/config.gz decompressed.
 vendor_boot: a device tree for the SoC (qcom,msm-id = the given id). dtbo: a table with an entry at ro.boot.dtbo_idx.
@@ -48,8 +50,14 @@ def boot_kernel(data):
 
 
 def banner(kernel):
+    """The linux_banner string: "Linux version " followed by a version number (5.10 also has printf formats that start
+    the same way, "Linux version %s (%s)", which are not the banner)."""
     i = kernel.find(b'Linux version ')
-    return kernel[i:kernel.index(b'\n', i)].decode(errors='replace') if i >= 0 else None
+    while i >= 0:
+        if kernel[i + 14:i + 15].isdigit():
+            return kernel[i:kernel.index(b'\n', i)].decode(errors='replace')
+        i = kernel.find(b'Linux version ', i + 1)
+    return None
 
 
 def ikconfig(kernel):
@@ -116,16 +124,21 @@ def dtbo_entries(data):
     return count
 
 
-def check(boot=None, vendor=None, dtbo=None, config=None, uname_r=None, uname_v=None, msm=(0x164, 0x20001), dtbo_idx=9):
+def check(boot=None, vendor=None, dtbo=None, config=None, uname_r=None, uname_v=None, msm=(0x164, 0x20001), dtbo_idx=9,
+          proc_version=None):
     results = []
     say = lambda ok, text: results.append(('PASS' if ok else 'FAIL', text))
     if boot is not None:
         version, kernel = boot_kernel(boot)
         b = banner(kernel)
-        say(b is not None and uname_r is not None and f'Linux version {uname_r} ' in b,
-            f'boot v{version}: kernel banner has uname -r {uname_r!r} ({(b or "no banner")[:60]})')
-        say(b is not None and uname_v is not None and b.rstrip().endswith(uname_v),
-            f'kernel banner ends with uname -v {uname_v!r}')
+        if proc_version is not None:
+            want = proc_version.strip()
+            say(b is not None and b.strip() == want, f'boot v{version}: kernel banner = /proc/version ({(b or "no banner")[:70]})')
+        else:
+            say(b is not None and uname_r is not None and f'Linux version {uname_r} ' in b,
+                f'boot v{version}: kernel banner has uname -r {uname_r!r} ({(b or "no banner")[:60]})')
+            say(b is not None and uname_v is not None and b.rstrip().endswith(uname_v),
+                f'kernel banner ends with uname -v {uname_v!r}')
         cfg = ikconfig(kernel)
         dev = gzip.decompress(config) if config else None
         say(cfg is not None and dev is not None and cfg == dev,
@@ -147,16 +160,20 @@ def main(argv=None):
     ap.add_argument('--vendor-boot', type=Path)
     ap.add_argument('--dtbo', type=Path)
     ap.add_argument('--config', type=Path, required=True)
-    ap.add_argument('--uname-r', required=True)
-    ap.add_argument('--uname-v', required=True)
+    ap.add_argument('--uname-r')
+    ap.add_argument('--uname-v')
+    ap.add_argument('--proc-version', type=Path, help="the tablet's /proc/version (adb shell cat /proc/version)")
     ap.add_argument('--msm-id', default='0x164:0x20001')
     ap.add_argument('--dtbo-idx', type=int, default=9)
     ap.add_argument('--json', type=Path)
     a = ap.parse_args(argv)
     soc, ver = a.msm_id.split(':')
     rd = lambda p: p.read_bytes() if p else None
+    if not a.proc_version and not (a.uname_r and a.uname_v):
+        ap.error('give --proc-version, or --uname-r and --uname-v')
+    pv = a.proc_version.read_text() if a.proc_version else None
     res = check(rd(a.boot), rd(a.vendor_boot), rd(a.dtbo), a.config.read_bytes(), a.uname_r, a.uname_v,
-                (int(soc, 0), int(ver, 0)), a.dtbo_idx)
+                (int(soc, 0), int(ver, 0)), a.dtbo_idx, pv)
     for level, text in res:
         print(f'{level:4} {text}')
     bad = any(level == 'FAIL' for level, _ in res)
