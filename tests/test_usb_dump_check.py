@@ -102,11 +102,14 @@ class WindowsScript(unittest.TestCase):
     def test_tablet_disk_is_opened_read_only(self):
         src = (ROOT / 'scripts/windows/dump-pipa-usb.ps1').read_text()
         opens = re.findall(r'\[System\.IO\.File\]::Open\(([^\n]+)', src)
-        drive = [o for o in opens if 'PhysicalDrive' in o]
-        self.assertEqual(len(drive), 1)
-        self.assertIn('[System.IO.FileAccess]::Read,', drive[0])
-        self.assertNotRegex(src, r'\$stream\.Write|SetLength|Initialize-Disk|Clear-Disk|Format-Volume|New-Partition|diskpart')
-        self.assertIn("BusType -ne 'USB'", src)
+        disk_opens = [o for o in opens if o.startswith('$path')]
+        self.assertEqual(len(disk_opens), 1)                                  # Open-ReadOnly, the only way to the disk
+        self.assertIn('[System.IO.FileAccess]::Read,', disk_opens[0])
+        self.assertIn('PhysicalDrive', src[src.index('function Open-ReadOnly'):src.index('function Read-At')])
+        self.assertNotRegex(src, r'\$stream\.Write|\$s\.Write|SetLength|Initialize-Disk|Clear-Disk|Format-Volume|New-Partition|diskpart|Set-Disk')
+        for proof in ("BusType -ne 'USB'", 'IsSystem -or $info.IsBoot', 'entries CRC32 does not match', '$Lun0Bytes',
+                      "if ($id.Kind -ne $Mode)"):
+            self.assertIn(proof, src)
 
 
 if __name__ == '__main__':
