@@ -4,8 +4,11 @@ builder really writes (tools/unixnu_payload_menu.py) and on the tablet's GPT whe
 
   storage_safety.py UNIXNU UNIXNU-PIPA [--gpt LAYOUT.json|DUMP.bin ...]
 
-Offline verdict (exit 0 / 1): no entry and no kernel argument may reset, erase or write storage, the root must not be
-Android's userdata, and the menu must be Android-first. With --gpt, also whether the tablet has the root partition
+Offline verdict (exit 0 / 1): no entry and no kernel argument may reset, erase or write storage outside iPadOS's own
+root partition: the root must not be Android's userdata, the Data store (data-persist=2), its reset (data-reset) and the
+log window are allowed only with the root on a partition of iPadOS's own (the driver writes them inside the root
+partition and refuses all of them on userdata, patch 0002); a confirm choice is judged with its entry's arguments, as the
+menu joins them (UniXNULib Main.c); and the menu must be Android-first. With --gpt, also whether the tablet has the root partition
 the image names, clear of userdata (exit 2 = BLOCKED: not ready for a hardware boot).
 
 What writes, from UniXNU-pipa drivers/ShengUfs (RootCommands.h hostWrite4k, NativeUfs.cpp): only two windows, the Data
@@ -42,14 +45,20 @@ def args_of(line):
 
 def check_args(where, line, say):
     args = args_of(line)
+    root = '1' in args.get('native-ufs-root', [])
+    part = (args.get('native-ufs-root-part') or ['userdata'])[-1] if root else None
+    own = root and part != 'userdata'
     for key, values in args.items():
         rule = FORBIDDEN.get(key)
         for value in values:
             why = rule(value) if callable(rule) else rule
-            if why:
-                say('FAIL', f'{where}: {key}={value} (or sheng-{key}) {why}')
-    if '1' in args.get('native-ufs-root', []):
-        part = (args.get('native-ufs-root-part') or ['userdata'])[-1]
+            if not why:
+                continue
+            if own:
+                say('PASS', f'{where}: {key}={value} writes only inside the root partition "{part}" (refused on userdata)')
+            else:
+                say('FAIL', f'{where}: {key}={value} (or sheng-{key}) {why}, and the root is not a partition of iPadOS\'s own')
+    if root:
         if part == 'userdata':
             say('FAIL', f'{where}: native-ufs-root=1 with the root on Android\'s userdata (add native-ufs-root-part=<own partition>)')
         else:
@@ -76,18 +85,15 @@ def judge(built, layouts=None):
     parts = set()
     for entry in entries:
         where = f'entry {entry.get("id")}'
-        if entry.get('confirm_args') or entry.get('id') == 'install':
-            say('FAIL', f'{where}: an install/confirm entry ({entry.get("confirm", "")!r}, args {entry.get("confirm_args")})')
+        if (entry.get('confirm_args') or entry.get('id') == 'install') and entry.get('type') != 'xnu':
+            say('FAIL', f'{where}: an install/confirm entry that is not an iPadOS boot ({entry.get("confirm", "")!r})')
         for text in (entry.get('title', ''), entry.get('confirm', '')):
             if WORDS.search(text):
                 say('FAIL', f'{where}: destructive wording {text!r}')
         if entry.get('type') == 'xnu':
             parts.add(check_args(where, entry.get('args', ''), say))
         for extra in entry.get('confirm_args', []):
-            check_args(f'{where} (confirm choice)', extra, say)
-    board_payload = built['board'].get('payload', {})
-    if 'install' in board_payload:
-        say('FAIL', 'board.toml has [payload.install]')
+            check_args(f'{where} (confirm choice {extra})', f'{entry.get("args", "")} {extra}', say)
     root_part = next((p for p in parts if p), None)
     verdict = 'FAIL' if any(level == 'FAIL' for level, _ in findings) else 'PASS'
     hardware = None

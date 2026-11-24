@@ -36,7 +36,7 @@ class RealPayloadMenu(unittest.TestCase):
 
     def test_menu_order_default_timeout(self):
         menu = self.built['menu']
-        self.assertEqual([e['id'] for e in menu['entry']], ['android', 'xnu', 'recovery', 'reset', 'shutdown', 'tools'])
+        self.assertEqual([e['id'] for e in menu['entry']], ['android', 'xnu', 'install', 'recovery', 'reset', 'shutdown', 'tools'])
         self.assertEqual((menu['boot']['default'], menu['boot']['timeout']), ('android', 10))
         self.assertNotIn('confirm', ''.join(menu['entry'][0]))
 
@@ -57,9 +57,12 @@ class RealPayloadMenu(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             port = Path(tmp)
             text = (PORT / 'board.toml').read_text()
-            text = text.replace('"native-ufs-root-part=ipados",\n', '"sheng-data-persist=2",\n')
-            text = text.replace('[payload.dualboot]', '[payload.install]\ntitle = "Install and boot"\nconfirm = "ERASE?"\n'
-                                'confirm_titles = ["a"]\nconfirm_args = ["sheng-data-reset=1"]\n\n[payload.dualboot]')
+            # the root back on Android's userdata: the persistent store and the install entry (patch 0013) then write there
+            text = text.replace('"native-ufs-root-part=ipados",\n', '')
+            if '[payload.install]' not in text:
+                text = text.replace('[payload.dualboot]', '[payload.install]\ntitle = "Install and boot"\nconfirm = "ERASE?"\n'
+                                    'confirm_titles = ["a"]\nconfirm_args = ["sheng-data-reset=1"]\n\n[payload.dualboot]')
+                text = text.replace('"native-ufs-diagnostics=1",\n', '"native-ufs-diagnostics=1",\n  "sheng-data-persist=2",\n')
             (port / 'board.toml').write_text(text)
             verdict, _, findings = self.safety.judge(self.build_menu(UNIXNU, port))
         self.assertEqual(verdict, 'FAIL')
@@ -67,13 +70,16 @@ class RealPayloadMenu(unittest.TestCase):
         for needle in ('data-reset', 'data-persist=2', "Android's userdata", 'install'):
             self.assertIn(needle, reasons)
 
-    def test_both_spellings_are_refused(self):
+    def test_both_spellings_are_judged_by_the_root_partition(self):
+        # a write window is allowed only inside iPadOS's own root partition; on Android's userdata it is refused
         for bad in ('sheng-data-persist=2', 'data-persist=2', 'sheng-data-reset=1', 'data-reset=2', 'sheng-log=1', 'log=1'):
-            menu = {'boot': {'default': 'android', 'timeout': 10}, 'entry': [
-                {'id': 'android', 'type': 'action', 'action': 'reset'},
-                {'id': 'xnu', 'type': 'xnu', 'args': f'native-ufs-root=1 native-ufs-root-part=ipados {bad}'},
-                {'id': 'recovery', 'type': 'action', 'action': 'reset'}]}
-            self.assertEqual(self.safety.judge({'menu': menu, 'board': {}})[0], 'FAIL', bad)
+            for root, want in (('native-ufs-root=1 native-ufs-root-part=ipados', 'PASS'), ('native-ufs-root=1', 'FAIL'),
+                               ('native-ufs-root=1 native-ufs-root-part=userdata', 'FAIL'), ('', 'FAIL')):
+                menu = {'boot': {'default': 'android', 'timeout': 10}, 'entry': [
+                    {'id': 'android', 'type': 'action', 'action': 'reset'},
+                    {'id': 'xnu', 'type': 'xnu', 'args': f'{root} {bad}'},
+                    {'id': 'recovery', 'type': 'action', 'action': 'reset'}]}
+                self.assertEqual(self.safety.judge({'menu': menu, 'board': {}})[0], want, (bad, root))
 
     def test_tablet_gpt(self):
         userdata = {'name': 'userdata', 'first_lba': 0x293000, 'last_lba': 0x3b037fa}

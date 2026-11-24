@@ -49,5 +49,24 @@ class Compose(unittest.TestCase):
             c.compose(boot, b'B', b'\0' * 1000, shim)                                        # payload not in sectors
 
 
+class RequireInstalled(unittest.TestCase):
+    def test_other_kernel_is_refused(self):
+        import gzip
+        import tempfile
+        sys.path.insert(0, str(ROOT / 'tests'))
+        from test_rom_match import kernel, boot_v4, CONFIG
+        d = Path(tempfile.mkdtemp())
+        (d / 'boot.img').write_bytes(boot_v4(kernel(release='4.19.325-cip135-st19-pipa-hyperos4-perf+')))
+        (d / 'config.gz').write_bytes(gzip.compress(CONFIG))
+        (d / 'pv').write_text('Linux version 4.19.325-cip136-st20-N0-kernel++ (b@h) (clang) #18 SMP PREEMPT\n')
+        for n in ('payload', 'shim', 'blob'):
+            (d / n).write_bytes(b'\0' * 4096)
+        rc = c.main(['--android-boot', str(d / 'boot.img'), '--bootshim-blob', str(d / 'blob'), '--payload', str(d / 'payload'),
+                     '--shim', str(d / 'shim'), '--out', str(d / 'out.img'), '--require-installed',
+                     '--config', str(d / 'config.gz'), '--proc-version', str(d / 'pv')])
+        self.assertEqual(rc, 1)
+        self.assertFalse((d / 'out.img').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

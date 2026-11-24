@@ -90,6 +90,10 @@ SCENARIOS = [
     ('b5, Vol+ -> menu, recovery entry', 'b5', 'vol+', False, 'recovery', False, True),
     ('b5 refused by ABL', 'b5', None, False, 'timeout', False, False),
     ('b5, Vol- (fastboot)', 'b5', 'vol-', False, 'timeout', False, True),
+    # Android recovery with B5 installed: a recovery request reaches the menu (by design); the tested way back to stock
+    # recovery is fastboot (Vol-), flash the dumped original boot_b, then Vol+ -- the stock image again
+    ('b5, `adb reboot recovery` (BCB) -> menu', 'b5', 'vol+', False, 'timeout', False, True),
+    ('stock boot_b restored from the dump, Vol+ -> recovery', 'stock', 'vol+', False, 'timeout', False, True),
 ]
 
 

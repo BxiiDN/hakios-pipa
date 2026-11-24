@@ -1,0 +1,32 @@
+diff --git a/board.toml b/board.toml
+--- a/board.toml
++++ b/board.toml
+@@ -236,6 +236,9 @@
+   "native-ufs-root=1",
+   "native-ufs-root-part=ipados",
+   "native-ufs-diagnostics=1",
++  # hakios-pipa 0013: the Data store is persistent again -- it lives at the end of the root partition "ipados"
++  # (NativeUfs native_ufs_store_open refuses a window when the root partition is Android's userdata).
++  "sheng-data-persist=2",
+   "sheng-disable-watchdogd=1",
+   "-no_corpses",
+   "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+@@ -280,8 +283,16 @@
+   "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
+   "dyld_shared_cache_arm64.11,34f3b84,979701944914d794,e0031faa1f2003d5",
+ ]
+-# hakios-pipa 0002: no [payload.install]. Its entry erased the iPadOS Data store (sheng-data-reset=1/2) inside
+-# Android's userdata. A reset entry returns only with a root partition of iPadOS's own (docs/DUAL-BOOT.md).
++# hakios-pipa 0002 removed [payload.install] while the iPadOS Data store lived inside Android's userdata. 0013: with
++# the root (and so the store) in the partition "ipados", the one-time Data initialisation is back. It only starts the
++# overlay over inside "ipados" (sheng-data-reset); Android's userdata is never opened for writing (NativeUfs refuses a
++# store window on a root partition named userdata). Every entry, with its confirm argument, fits XNU's 1023-character
++# boot line (tools/cmdline_budget.py).
++[payload.install]
++title = "Initialise iPadOS Data (first boot)"
++confirm = "Start iPadOS Data over in the ipados partition? (Android is not touched)"
++confirm_titles = ["Initialise Data, skip Hello, boot", "Initialise Data, show Hello, boot"]
++confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
+ 
+ 
+ # Dual boot with Android (hakios-pipa patches/unixnu/0001): Android first and default, so the 10 s countdown ends in

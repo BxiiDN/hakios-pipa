@@ -3,6 +3,7 @@ Windows drive, compares every file with its hash on the tablet, and verify catch
 for the tablet."""
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -31,7 +32,8 @@ shell)
     *) echo "unexpected: $cmd" >&2; exit 9 ;;
   esac ;;
 pull)
-  src=$2; dst=$(wslpath -u "$3" 2>/dev/null || echo "$3")
+  src=$2; dst=$3
+  command -v wslpath >/dev/null 2>&1 && case "$dst" in *\\*) dst=$(wslpath -u "$dst") ;; esac
   if [ "$src" = /sdcard/. ]; then cp -a "$FAKE_SDCARD"/. "$dst"/; [ -n "$FAKE_BREAK" ] && : > "$dst/$FAKE_BREAK"; else cp "$FAKE_APK" "$dst"; fi ;;
 *) echo "unexpected adb $1" >&2; exit 9 ;;
 esac
@@ -57,6 +59,21 @@ class BackupScript(unittest.TestCase):
     def run_script(self, *args, **extra):
         return subprocess.run(['bash', str(SCRIPT), *map(str, args)], capture_output=True, text=True,
                               env=dict(self.env, **extra))
+
+    def test_without_wslpath_like_the_ci_runner(self):
+        # the GitHub runner has no wslpath: PATH without it must work the same
+        nowsl = self.tmp / 'nowsl'
+        nowsl.mkdir()
+        for tool in ('bash', 'sha256sum', 'find', 'sort', 'xargs', 'comm', 'cut', 'sed', 'tr', 'mkdir', 'cp', 'cat',
+                     'wc', 'diff', 'grep', 'dirname', 'basename', 'realpath', 'chmod', 'date', 'head', 'ls', 'tee', 'env',
+                     'awk', 'mktemp', 'touch', 'rm', 'printf'):
+            src = shutil.which(tool)
+            if src:
+                (nowsl / tool).symlink_to(src)
+        r = subprocess.run(['bash', str(SCRIPT), 'backup', str(self.tmp / 'ci')], capture_output=True, text=True,
+                           env=dict(self.env, PATH=f'{self.tmp / "bin"}:{nowsl}'))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('BACKUP COMPLETE', r.stdout + r.stderr)
 
     def test_device_commands_only_read(self):
         code = '\n'.join(l for l in SCRIPT.read_text().splitlines()

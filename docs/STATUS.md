@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 19, 25 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 20, 25 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,17 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — sesi 11–12: hanya image root partisi `ipados` yang belum ada
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 20 (offline; tidak ada boot, flash, atau tulisan ke tablet)
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| CI check 45436605145 | diperbaiki: `backup-android.sh` tanpa `wslpath` (runner Ubuntu); tes baru meniru PATH runner |
+| Data iPadOS | `0013`: `sheng-data-persist=2` + entri inisialisasi sekali; cmdline 995/1014 dari 1023 |
+| Critical unlock | ABL: `partition` ada di tabel critical → `flash partition:0` butuh critical unlock; cek read-only `fastboot oem device-info` |
+| B5 basis | `--require-installed`: hanya kernel N0 terpasang (`/proc/version`) |
+| Recovery setelah B5 | Vol− → fastboot → flash `boot_b` asli → Vol+ (disimulasikan, dites) |
+| Verifikasi menyeluruh | `final_verify.py`: 20/21 PASS; sisa = basis B5 menunggu dump `boot_b` |
 
 ## Sesi 19 (B5, penulis GPT, image root; offline, tidak ada tulisan ke tablet)
 

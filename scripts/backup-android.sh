@@ -16,7 +16,10 @@
 # DIR holds personal data: keep it on this PC, never in a Git tree or an upload.
 source "$(dirname "$0")/adb-lib.sh"
 adb_sh() { { adb shell "$1" || true; } | tr -d '\r'; }   # partial reads (du, find over unreadable folders) are expected
-winpath() { wslpath -w "$1"; }
+# adb.exe of Windows (driven from WSL) needs Windows paths; a Linux adb takes the path as it is.
+winpath() { if command -v wslpath >/dev/null 2>&1 && [[ "$(command -v adb)" == /mnt/* || "$(head -c 300 "$(command -v adb)" 2>/dev/null)" == *adb.exe* ]]; then wslpath -w "$1"; else printf '%s' "$1"; fi; }
+# PC-side subdirectory joined the way the adb in use expects it
+pcjoin() { case "$1" in *\\*) printf '%s\\%s' "$1" "$2" ;; *) printf '%s/%s' "$1" "$2" ;; esac; }
 mode=${1:?usage: backup-android.sh plan|backup|verify|restore-plan DIR}
 dir=${2:?usage: backup-android.sh plan|backup|verify|restore-plan DIR}
 dir=$(realpath -m "$dir")
@@ -71,9 +74,9 @@ backup)
 		mkdir -p "$dir/apks/$pkg"
 		adb_sh "pm path $pkg" | sed -n 's/^package://p' | while read -r path; do
 			name=$(basename "$path")
-			(cd / && adb pull "$path" "$(winpath "$dir/apks/$pkg")\\$name" >/dev/null 2>&1) || say "WARN: could not pull $path"
+			(cd / && adb pull "$path" "$(pcjoin "$(winpath "$dir/apks/$pkg")" "$name")" >/dev/null 2>&1) || say "WARN: could not pull $path"
 			want=$(adb_sh "sha256sum '$path'" | cut -c1-64)
-			got=$(sha256sum "$dir/apks/$pkg/$name" 2>/dev/null | cut -c1-64)
+			got=$({ sha256sum "$dir/apks/$pkg/$name" 2>/dev/null || true; } | cut -c1-64)
 			echo "$([ -n "$want" ] && [ "$want" = "$got" ] && echo SAME || echo DIFF) $pkg/$name" >> "$dir/meta/apk-compare.txt"
 		done
 	done

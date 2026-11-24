@@ -228,6 +228,13 @@ class Simulation(unittest.TestCase):
             self.assertNotEqual(outcome, 'LOOP', (key, charger, choice, root, accepted, trace))
             self.assertEqual(mode_b_sim.abl('b5', 'vol-', charger, accepted), 'FASTBOOT')
 
+    def test_android_recovery_after_b5(self):
+        # with B5 a recovery request opens the menu and ends in Android, never in a loop; restoring the original boot_b
+        # (always possible from fastboot, which ABL keeps in its own partition) gives stock recovery back
+        self.assertEqual(mode_b_sim.run('b5', 'vol+')[1], 'ANDROID')
+        self.assertEqual(mode_b_sim.abl('b5', 'vol-', False), 'FASTBOOT')
+        self.assertEqual(mode_b_sim.run('stock', 'vol+')[1], 'RECOVERY')
+
     def test_the_mode_a_image_in_flash_loops(self):
         self.assertEqual(mode_b_sim.run('mode_a')[1], 'LOOP')
 

@@ -112,9 +112,23 @@ def main(argv=None):
     ap.add_argument('--shim', type=Path, required=True)
     ap.add_argument('--vendor-boot', type=Path, help='for the ABL layout check (defaults to no vendor ramdisk)')
     ap.add_argument('--partition-bytes', type=lambda v: int(v, 0), default=abl_layout.BOOT_B_BYTES)
+    ap.add_argument('--require-installed', action='store_true',
+                    help='refuse unless the Android kernel is the installed one (needs --config and --proc-version)')
+    ap.add_argument('--config', type=Path, help="the tablet's /proc/config.gz")
+    ap.add_argument('--proc-version', type=Path, help="the tablet's /proc/version")
     ap.add_argument('--out', type=Path, required=True)
     a = ap.parse_args(argv)
     try:
+        if a.require_installed:
+            import rom_match
+            if not (a.config and a.proc_version):
+                raise ComposeError('--require-installed needs --config and --proc-version')
+            res = rom_match.check(boot=a.android_boot.read_bytes(), config=a.config.read_bytes(),
+                                  proc_version=a.proc_version.read_text())
+            bad = [t for level, t in res if level == 'FAIL']
+            if bad:
+                raise ComposeError('the Android boot image is not the installed kernel (owner decision: B5 on the '
+                                   'installed N0 kernel): ' + bad[0])
         if not (a.mode_a_boot or a.bootshim_blob):
             raise ComposeError('give --mode-a-boot (or --bootshim-blob)')
         bootshim = a.bootshim_blob.read_bytes() if a.bootshim_blob else bootshim_from_mode_a(a.mode_a_boot.read_bytes())

@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–19)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–20)
 
 **Status (24 Nov, terukur di tablet): LUN 0 tidak punya ruang kosong; Rancangan A tidak mungkin. Belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -372,3 +372,59 @@ Patch `0002` mematikan `sheng-data-persist=2` dan entri Install karena dulu stor
 `ipados`, store ada di ujung `ipados` (driver menolak `userdata`), jadi keduanya boleh kembali — tetapi cmdline payload
 sudah 974 dari ±1000 byte: `sheng-data-persist=2` (21 B) muat, entri inisialisasi Data sekali (`sheng-data-reset=1`) tidak
 tanpa membuang argumen diagnostik. Tanpa ini iPadOS boot dengan Data volatil (tidak tersimpan). Keputusan + uji hardware.
+
+## 13. Sesi 20: Data iPadOS persisten, critical unlock, verifikasi menyeluruh, preflight RAM-boot
+
+### Data iPadOS persisten (`unixnu-pipa/0013`)
+
+`sheng-data-persist=2` kembali dan entri menu **"Initialise iPadOS Data (first boot)"** (konfirmasi: `sheng-data-reset=1`
+atau `=2`). Batas XNU sebenarnya 1023 karakter (`BOOT_LINE_LENGTH 1024`, DarwinBoot menyalin paling banyak itu), bukan
+±1000: entri iPadOS 995, entri inisialisasi 1014 — **tidak ada argumen diagnostik yang perlu dibuang**
+(`tools/cmdline_budget.py` pada payload v10). Pengaman: reset hanya ada bila root = partisi bernama selain `userdata` dan
+store persisten; NativeUfs menolak jendela store bila root = `userdata` (`0002`, dites dari patch). Store berada di ujung
+`ipados` (19,1 GB minimum ≤ 21,48 GB). Payload/MODE A v10: `~/hakios/payload-v10.*` (`boot.img` 103 481 344 B).
+
+### Penulisan GPT lewat ABL: critical unlock **wajib**
+
+Dari biner ABL (OTA OS2.0.16): `IsCriticalPartition` (`.text 0x3e948`) memakai tabel 24 nama di `0xc3548`:
+`abl rpm tz sdi xbl hyp pmic bootloader devinfo **partition** devcfg ddr frp cdt cmnlib cmnlib64 keymaster mdtp aop
+multiimgoem secdata imagefv qupfw uefisecapp`. Alur flash (`.text 0x3a6d4..0x3a748`): selain `crclist`/`sparsecrclist`,
+bila perangkat tidak critical-unlocked dan nama termasuk tabel → "Flashing is not allowed for Critical Partitions".
+Jadi `fastboot flash partition:0 gpt_both0.bin` hanya diterima bila **critical-unlocked**. Petunjuk tidak langsung:
+skrip porter menulis `abl_ab`, `xbl_ab`, `tz_ab`, `hyp_ab`, `keymaster_ab`, `aop_ab`, `qupfw_ab`, `uefisecapp_ab`,
+`devcfg_ab`, `cmnlib*_ab` (semua di tabel itu); bila skrip itu dulu berhasil di tablet ini, ABL menerima flash critical.
+Pemastian read-only: `fastboot oem device-info` ("Device critical unlocked: …") pada sesi fastboot berikut. Tidak ada
+unlock yang dilakukan atau diusulkan; bila tidak critical-unlocked, jalan lain (penulis GPT di firmware UEFI, dari image
+yang sama) perlu dibuat dulu.
+
+### Recovery Android setelah B5
+
+Dengan B5, permintaan recovery (Vol+, `adb reboot recovery`, BCB) membuka menu; timeout/entri Android → Android normal
+(tidak pernah loop, `mode_b_sim.py`). Jalur kembali ke recovery stock yang selalu tersedia: Vol− → fastboot (ABL di
+partisinya sendiri) → `fastboot flash boot_b boot_b-asli.img` (dari dump USB boot LUN) → Vol+ → recovery stock.
+
+### Verifikasi menyeluruh (`tools/final_verify.py`, 25 Nov)
+
+20 dari 21 PASS: kernel tahap B `1d02cbe8…` + kunci owner, anchor dan kedua manifest root tertanam; MODE A v10 (konsisten,
+payload + GPU addon, menu/cmdline, ABL); image root (ukuran, SHA-256, OS/SystemOS, `.vroot` = kebijakan owner); B5
+(ABL, code0 → shim, BootShim+FD, payload). Satu FAIL yang memang diharapkan: basis B5 pratinjau = kernel ROM, bukan
+kernel N0 terpasang — `b5_compose.py --require-installed` menolaknya; basis akhir menunggu dump `boot_b`.
+
+### Preflight RAM-boot berikutnya (belum diizinkan)
+
+Image: **MODE A v9** (`a1ce6a26…`, 103 481 344 B; Tools: GPT view/export, USB disk LUN 0 / boot LUN read-only; tanpa
+entri inisialisasi Data, jadi tidak ada entri yang menyentuh store). ABL layout PASS; < `max-download-size` 768 MiB;
+< `boot_b`. Slot terakhir terbaca: `b` successful, unbootable=no.
+
+| Langkah | Tulis ke tablet? |
+| --- | --- |
+| `adb reboot bootloader` (atau Power + Vol−); `fastboot getvar …`, `fastboot oem device-info` | tidak |
+| `fastboot boot` image v9 (RAM) → menu → Tools | tidak |
+| "USB disk: boot LUN (read only)" → di PC (Administrator) `dump-pipa-usb.ps1 -Mode boot` → Power di tablet | tidak (WriteBlocks ditolak) |
+| "USB disk: LUN 0 (read only)" → `-Mode lun0` | tidak |
+| menu → **Power off**; nyalakan dengan Power → Android | tidak |
+
+Risiko dan pemulihan: (1) ABL menolak image → slot `_b` bisa ditandai unbootable → `fastboot set_active b` (butuh izin
+terpisah); (2) `UsbMsdDxe` (biner Qualcomm) macet atau Windows meminta "format" → batalkan; tahan Power 15–20 s →
+Android (cara yang sudah terbukti); (3) jangan memilih entri iPadOS (belum ada `ipados`: panic → restart otomatis
+→ Android) atau Restart; (4) dump berisi `persist`/`modemst` (data kalibrasi): hanya di `~/.hakios-private`.
