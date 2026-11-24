@@ -1,0 +1,6 @@
+{"mode": "partition",
+ "note": "docs/IPADOS-PARTITION.md design B, NOT approved: userdata's end moves down 20 GiB and 'ipados' takes the space. This ERASES all Android apps and files (userdata and metadata must be formatted: f2fs on dm-default-key cannot be shrunk offline without the device's keys). Stays FAIL until the owner sets userdata_erase_confirmed and backup_verified after a backup was restored once.",
+ "userdata_erase_confirmed": false,
+ "backup_verified": false,
+ "resize": [{"partition": "userdata", "shrink_mib": 20480}],
+ "create": [{"name": "ipados", "size_mib": 20480, "lun": "sda.bin", "after_resize": true}]}

@@ -135,6 +135,8 @@ Konsekuensi yang harus diterima pemilik: dengan B5 terpasang, recovery stock han
 
 ## GPT dan partisi `ipados` (sesi 12)
 
+Sesi 13: kebutuhan, pembaca GPT read-only, rancangan, backup dan pemulihan di [IPADOS-PARTITION.md](IPADOS-PARTITION.md).
+
 Read-only, tanpa root: `/dev/block/by-name` terbaca (nama → nomor), ukuran/offset tidak (SELinux menolak
 `/sys/block/*/size`, `/proc/partitions`). Rekaman lama (`board.toml`): `userdata` = `sda34`, LBA 4 KiB
 `0x293000..0x3b037fa` (242,4 GB). `sda34` adalah nomor tertinggi di LUN 0 dan awalnya sama dengan unit 128 GB (hanya

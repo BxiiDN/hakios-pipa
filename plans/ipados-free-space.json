@@ -1,0 +1,3 @@
+{"mode": "partition",
+ "note": "docs/IPADOS-PARTITION.md design A: one new GPT entry 'ipados' on LUN 0 in space no partition holds. No partition is moved, resized or formatted; Android's userdata and metadata are not touched. Valid only if the GPT reader (package/gpt-reader) finds a free range of at least 20 GiB on LUN 0. Writing the GPT needs the owner's explicit approval.",
+ "create": [{"name": "ipados", "size_mib": 20480, "lun": "sda.bin", "type": "0fc63daf-8483-4772-8e79-3d69d8477de4"}]}
