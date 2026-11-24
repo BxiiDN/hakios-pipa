@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # READY FOR HARDWARE BOOT -- a different statement from OFFLINE CHECKS PASS (scripts/build.sh). Every artefact a
 # temporary boot needs must exist and verify, and the hardware preflight must pass. Exit 0 only for "YES".
-#   readiness.sh [--image IMAGE] [--gpt DIR] [--device]
+#   readiness.sh [--image IMAGE] [--out DIR]... [--derive 'CMD {}']... [--gpt DIR] [--device]
+# --derive: what the payload step ran on the kernel, repeated by tools/image_consistency.py on a copy.
+# --out (repeatable) replaces the search roots, e.g. a reproducible build (out-repro-*) and its payload directory.
 # Without --image it looks for UniXNU's boot image in $HAKIOS_WORK/UniXNU/out/pipa/.
 source "$(dirname "$0")/lib.sh"
-img=; pre=()
+img=; pre=(); outs=(); derive=()
 while [ $# -gt 0 ]; do case $1 in --image) img=$2; shift;; --gpt) pre+=(--gpt "$2"); shift;; --device) pre+=(--device);;
+	--out) outs+=("$2"); shift;;
+	--derive) derive+=(--derive "$2"); shift;;
 	*) die "unknown argument $1";; esac; shift; done
-OUT=$WORK/UniXNU/out/pipa
+[ ${#outs[@]} -gt 0 ] || outs=("$WORK/UniXNU/out/pipa")
+for o in "${outs[@]}"; do [ -d "$o" ] || die "--out $o: no such directory"; done
 missing=0
 have() {  # have WHAT PATH-OR-EMPTY
 	if [ -n "$2" ] && [ -s "$2" ]; then say "PRESENT  $1: $2 ($(sha256sum "$2" | cut -c1-16)...)"; else say "MISSING  $1"; missing=$((missing + 1)); fi
 }
-first() { { find "$OUT" -name "$1" -type f 2>/dev/null || true; } | sort | tail -1; }
-kernel=$(find "$OUT" -path '*/kernel/kernel.macho' -type f 2>/dev/null | sort | tail -1 || true)
+first() { { find "${outs[@]}" -name "$1" -type f 2>/dev/null || true; } | sort | tail -1; }
+kernel=$(find "${outs[@]}" -path '*/kernel/kernel.macho' -type f 2>/dev/null | sort | tail -1 || true)
 # docs/BOOTSTRAP.md: the stage-A reference kernel stays at kernel/kernel.macho while stage B runs (the port's builders
 # read it there); if stage B failed it is still there, and it is never a boot candidate.
-for ref in $(find "$OUT" -path '*/stage-a/kernel.macho' -type f 2>/dev/null || true); do
+for ref in $(find "${outs[@]}" -path '*/stage-a/kernel.macho' -type f 2>/dev/null || true); do
 	if [ -n "$kernel" ] && cmp -s "$ref" "$kernel"; then
 		say "FAIL     kernel.macho is the stage-A reference kernel (no HID, display, storage or owner root): not a boot candidate"
 		kernel=; break
@@ -39,7 +44,7 @@ if [ $missing = 0 ]; then
 	python3 "$ROOT/tools/build_manifest.py" "$WORK/UniXNU" --uefi "$WORK/uefi-pipa" --out "$manifest" >/dev/null
 	python3 "$ROOT/tools/image_consistency.py" --image "$img" --kernel "$kernel" --payload "$(first payload.img)" \
 		--firmware "$({ find "$WORK/uefi-pipa" -path '*pipa*' -name 'SILICIUM_UEFI.fd' -type f 2>/dev/null || true; } | sort | tail -1)" \
-		--manifest "$manifest" || missing=$((missing + 1))
+		--manifest "$manifest" "${derive[@]}" || missing=$((missing + 1))
 	"$ROOT/scripts/preflight.sh" --image "$img" "${pre[@]}" || missing=$((missing + 1))
 else say "hardware preflight not run: artefacts are missing"; fi
 [ $missing = 0 ] && { say "READY FOR HARDWARE BOOT: YES"; exit 0; }

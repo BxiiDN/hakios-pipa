@@ -3,8 +3,13 @@
 # input UniXNU fetches, and UNIXNU_OWNER_* set (docs/OWNER-KEY.md).
 #   kernel-two-stage.sh a        stage A: reference kernel without ShengHidInput and the legacy display archive,
 #                                built and prelinked by UniXNU; records its provenance (never a boot candidate)
-#   kernel-two-stage.sh b        stage B: the full board, every archive, qualified against the stage-A kernel
+#   kernel-two-stage.sh b        stage B: the full board, every archive, qualified against the stage-A kernel.
+#                                LOCAL ONLY: the legacy display archive embeds the unit's own firmware (SQE, ZAP,
+#                                NT36532 touch; docs/STATUS.md), which has no public source and never leaves the build
+#                                machine -- not in a commit, an artifact, a log or a GitHub secret. Refused on Actions;
+#                                the firmware is checked against its pins (tools/firmware_check.py) before the build
 #   kernel-two-stage.sh recheck  qualify ShengHidInput again against the final kernel; the bindings must not move
+#                                (local only, as stage B)
 #   kernel-two-stage.sh gpu-userland    Turnip (Mesa freedreno Vulkan, ARM64/iOS 17) and the AdrenoMetal bridge, with
 #                                UniXNU's own build-boot-runtime.py build_plugin('ios'); stage B then finds them
 #   kernel-two-stage.sh gpu-addon       pipa's build-pipa-gpu-addon.py on the gpu-userland tree: NativeAdrenoMetal.bundle,
@@ -28,6 +33,10 @@ STAGE_PATCHES=("$ROOT"/patches/stage-a/*.patch)   # 0001, then 0002 (no storage 
 STORAGE_AUDIT=${HAKIOS_STORAGE_AUDIT:-$ROOT/logs/qemu-storage/interface-audit.json}
 IOSERVICE_OBJ=$TREE/build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOService.cpo   # its DWARF: IOService size
 mkdir -p "$EV"
+# Stage B and the recheck need the unit's private firmware: on GitHub's runners they are refused, never skipped into a pass.
+local_only() {
+	[ -z "${GITHUB_ACTIONS:-}" ] || die "stage $stage is local only: it embeds the unit's private firmware (SQE, ZAP, touch), which is never given to CI (docs/STATUS.md)"
+}
 # Reproducible version string: XNU's config/newvers.pl stamps `date` into "Darwin Kernel Version ...: <date>" unless
 # KERNEL_BUILD_DATE is set ("allowing for reproducible builds"). Runs 45100879621 and 45104257856 built identical
 # archives but kernels that differ, and their version strings carry the build time. Use the commit date of the
@@ -142,7 +151,12 @@ a)
 	cp "$KERNEL" "$OUTDIR/stage-a/kernel.macho"; cp "$OUTDIR/kernel/kernel.json" "$OUTDIR/stage-a/kernel.json"
 	;;
 b)
+	local_only
 	git -C "$P" apply --check -R "$STAGE_PATCH" 2>/dev/null && die "the stage-A patch is still applied to the port"
+	# The firmware build-gop-legacy-display.py embeds, against the unit's pins; only verdicts and digests are recorded.
+	pins=(--pins "$P/proprietary-files.txt"); for m in "$ROOT"/manifests/pipa-official-rom-*.txt; do pins+=(--pins "$m"); done
+	python3 "$ROOT/tools/firmware_check.py" "$P/.cache/firmware" "${pins[@]}" --json "$EV/stage-b-firmware-check.json" \
+		|| die "the firmware in $P/.cache/firmware does not match its pins (scripts/collect-firmware.sh)"
 	# Storage ABI: the QEMU record may bind pipa's drivers only if the stage-A pipa kernel carries the same original
 	# IOStorageFamily class at the same addresses (tools/storage_abi_transfer.py). Nothing in the record is edited.
 	[ -f "$STORAGE_AUDIT" ] || die "no interface-audit.json at $STORAGE_AUDIT (scripts/qemu-storage-abi.sh; HAKIOS_STORAGE_AUDIT)"
@@ -170,6 +184,7 @@ b)
 		--unixnu "$U" --dwarf "$IOSERVICE_OBJ" --json "$EV/storage-transfer-final.json" || die "final kernel: storage bindings do not hold"
 	;;
 recheck)
+	local_only
 	[ -f "$EV/stage-b-hid-abi-audit.json" ] || die "no stage-B HID audit; run stage b first"
 	final=$TREE/build/xnu-prelink/native-owner-ufs-cpu-desktop-zfinal-candidate.macho
 	cp "$KERNEL" "$final"; cp "$OUTDIR/kernel/kernel.json" "${final%.macho}.json"; touch "$final"

@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 sys.path.insert(0, str(ROOT / 'tests'))
 import fatimage  # noqa: E402
 import verify_bootimg as vb  # noqa: E402
-from image_consistency import check  # noqa: E402
+from image_consistency import check, derive  # noqa: E402
 
 KERNEL = b'\xcf\xfa\xed\xfe' + b'K' * 5000
 FIRMWARE = b'_FVH' + b'F' * 9000
@@ -83,6 +83,38 @@ class Consistency(unittest.TestCase):
         self.assertEqual(fails(check(img, KERNEL, FIRMWARE, pl, good)), [])
         stale = dict(good, uefi_files=[{'path': 'Build/x/SILICIUM_UEFI.fd', 'sha256': '0' * 64}])
         self.assertTrue(any('SILICIUM_UEFI.fd' in t for t in fails(check(img, KERNEL, FIRMWARE, pl, stale))))
+
+
+class Derive(unittest.TestCase):
+    """--derive: the payload kernel must be what the payload step's commands make of the built kernel, re-run here."""
+    # a stand-in for patch-xnu-entry-probe.py: rewrites bytes of the kernel in place
+    PATCH = sys.executable + " -c \"import sys; p=sys.argv[1]; d=bytearray(open(p,'rb').read()); d[4:8]=b'PRBE'; open(p,'wb').write(d)\" {}"
+
+    def patched(self):
+        k = bytearray(KERNEL); k[4:8] = b'PRBE'
+        return bytes(k)
+
+    def test_rederived_kernel_passes(self):
+        pl = payload(self.patched())
+        derived = derive(KERNEL, [self.PATCH])
+        self.assertEqual(derived, self.patched())
+        self.assertEqual(fails(check(image(pl=pl), KERNEL, FIRMWARE, pl, derived=derived, steps=1)), [])
+
+    def test_patched_kernel_without_derive_fails(self):
+        pl = payload(self.patched())
+        self.assertTrue(any('built kernel' in t for t in fails(check(image(pl=pl), KERNEL, FIRMWARE, pl))))
+
+    def test_other_kernel_fails_even_after_derive(self):
+        other = bytearray(b'\xcf\xfa\xed\xfe' + b'X' * 5000); other[4:8] = b'PRBE'
+        pl = payload(bytes(other))
+        derived = derive(KERNEL, [self.PATCH])
+        self.assertTrue(any('--derive' in t for t in fails(check(image(pl=pl), KERNEL, FIRMWARE, pl, derived=derived, steps=1))))
+
+    def test_command_without_placeholder_or_failing_is_refused(self):
+        with self.assertRaises(ValueError):
+            derive(KERNEL, [sys.executable + ' -c pass'])
+        with self.assertRaises(ValueError):
+            derive(KERNEL, [sys.executable + ' -c "import sys; sys.exit(3)" {}'])
 
 
 if __name__ == '__main__':

@@ -5,6 +5,9 @@
 # builds with itself. The Linux job builds UniXNU's Linux toolchain (scripts/linux/setup-toolchain.py) and caches it,
 # for the WSL2 route.
 #
+# The kernel job builds stage A (reference kernel, prelinked), the static storage checks, Turnip, the Metal bridge and
+# the GPU addon. Stage B is local only (scripts/kernel-two-stage.sh b, with the unit's firmware checked against its pins).
+#
 # Nothing derived from Apple software or vendor firmware is uploaded: no kernel, kernelcache, IPSW member, firmware
 # volume or image. Only text logs, and a manifest of SHA-256 digests and sizes of what was built. A step that fails
 # fails its job; nothing is skipped into a pass.
@@ -52,8 +55,7 @@ jobs:
     # committed as owner/owner-public.pem, or -- while there is none -- an ephemeral key made in the run. An ephemeral
     # kernel proves compile, link and prelink only: it authorizes no root and is never a boot candidate.
     name: macos-kernel
-    # Stage B binds the storage drivers to the live QEMU record: the one this run's QEMU job made, never a local copy.
-    needs: macos-qemu-storage
+    # No needs: the live QEMU storage record (macos-qemu-storage) is for stage B, which is local only.
     runs-on: macos-26-intel
     timeout-minutes: 360
     env:
@@ -107,16 +109,6 @@ jobs:
           ./unixnu defconfig pipa_defconfig -D ../UniXNU-pipa
           ./unixnu fetch
           ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
-      # docs/BOOTSTRAP.md: the port's ABI builders qualify their drivers against an already prelinked kernel.
-      - uses: actions/download-artifact@v4
-        with:
-          name: qemu-storage-evidence
-          path: ${{ runner.temp }}/qemu-storage-evidence
-      - name: The QEMU storage record of this run
-        run: |
-          a="$RUNNER_TEMP/qemu-storage-evidence/qemu-storage/interface-audit.json"
-          [ -f "$a" ] || { find "$RUNNER_TEMP/qemu-storage-evidence" -maxdepth 3; exit 1; }
-          shasum -a 256 "$a"; echo "HAKIOS_STORAGE_AUDIT=$a" >> "$GITHUB_ENV"
       - name: Stage A -- reference kernel without ShengHidInput and the legacy display archive (never a boot image)
         id: stage_a
         env:
@@ -138,16 +130,10 @@ jobs:
         env:
           HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
         run: scripts/kernel-two-stage.sh gpu-addon
-      - name: Stage B -- the full board against the stage-A kernel (XNU, every archive, final link, prelink)
-        id: stage_b
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
-        run: scripts/kernel-two-stage.sh b
-      - name: Recheck -- ShengHidInput qualified again against the final kernel; its bindings must not move
-        env:
-          HAKIOS_EVIDENCE: ${{ runner.temp }}/public/two-stage
-        run: scripts/kernel-two-stage.sh recheck
+      # Stage B (the full board, final link, prelink) and its recheck are LOCAL ONLY: the legacy display archive embeds
+      # the unit's own SQE, ZAP and NT36532 touch firmware, which has no public source (only the GMU is in
+      # linux-firmware) and is never given to CI -- not as a commit, an artifact or a secret. kernel-two-stage.sh refuses
+      # them on Actions; run 45292813840 stopped there on "Missing GMU firmware". docs/STATUS.md, "Stage B lokal".
       - name: The end of each build log (failure only)
         if: failure()
         run: |

@@ -1,13 +1,42 @@
-# Status verifikasi — hakios-pipa (sesi 10, 24 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 11, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
 Dua status terpisah, tidak pernah disamakan:
 
 - **OFFLINE CHECKS** (`scripts/build.sh`, exit code): PASS — lihat `docs/build-summary-2026-11-23-s3.txt`.
-- **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — kernel, firmware, payload, boot image, root image dan
-  anchor kunci owner belum ada; hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
+- **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — sesi 11: hanya image root partisi `ipados` yang belum ada
+  (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 11 (WSL2 + GitHub Actions; tidak ada boot, flash, repartisi, atau perubahan slot)
+
+### Stage B lokal
+
+Tahap B (board lengkap, link akhir, prelink) dan `recheck` **hanya lokal**. Archive legacy display menanam firmware unit
+ini sendiri: SQE `b4c27420…`, ZAP `.elf` `dd930441…`, touch NT36532 CSOT `ba7d0eb9…`. Tidak ada sumber publiknya
+(hanya GMU `df79fa84…` yang byte-identik dengan `qcom/a650_gmu.bin` di linux-firmware; tiga revisi `a650_sqe.fw` di
+linux-firmware semuanya lain). Firmware itu tidak pernah keluar dari mesin build: tidak di commit, artifact, log, atau
+GitHub Secrets. `scripts/kernel-two-stage.sh b|recheck` menolak jalan di Actions, dan tahap B lokal memeriksa
+firmware terhadap pin (`tools/firmware_check.py`) sebelum build.
+
+| Pemeriksaan | Hasil | Bukti |
+| --- | --- | --- |
+| CI run 45292813840 | `macos-firmware`, `macos-qemu-storage` (live, Intel), `macos-gpu` 15-intel dan 26-intel (rerun) **PASS**. `macos-kernel`: stage A, storage statis, Turnip + bridge, GPU addon **PASS**; stage B **FAIL** `Missing GMU firmware …/.cache/firmware/gpu/a650_gmu.bin` (bukan flake jaringan) | artefak `kernel-logs-and-manifest`, `archive-22-build-gop-legacy-display.log` |
+| Workflow | stage B + recheck dihapus dari `macos-kernel`; job itu tidak lagi menunggu `macos-qemu-storage` (record live hanya untuk tahap B; `storage-static` tidak membacanya). Job QEMU tetap jalan | `.github/workflows/unixnu-build.yml` |
+| Guard | `GITHUB_ACTIONS=true kernel-two-stage.sh b` / `recheck` → `ERROR: stage b is local only …` | lokal |
+| Firmware lokal | **FIRMWARE PASS** (4/4 terhadap `proprietary-files.txt` + manifest ROM resmi) | `evidence/readiness-s11.*/firmware-check.txt` |
+| Kernel tahap B lokal | Dua clean build baru (TAG v5, path sama, dengan cek firmware): tahap B **`1d02cbe8…` = baseline sesi 10**, tahap A `1b094fd6…`, keduanya **REPRODUCIBLE**. `stage-b.log` tetap berakhir `ERROR: a required archive input was skipped`: hanya `build-pipa-gpu-addon` (Turnip lokal tidak ada; addon = input payload, bukan kernel, diambil dari CI). Cek transfer storage final yang tidak sempat dijalankan skrip, dijalankan terpisah: **STORAGE ABI TRANSFER PASS** | `evidence/repro-v5-run{1,2}` |
+| Image consistency | **Koreksi sesi 10**: pada kernel tahap B `1d02cbe8…` cek "payload kernel = kernel yang dibangun" **FAIL**: langkah payload UniXNU menulis ulang kernel (`patch-xnu-entry-probe.py --panic-screen --no-reset`, `scripts/unixnu/payload.py`) → `c0350252…`. Dibuktikan byte-identik dengan mengulang patch pada salinan `1d02cbe8…`. `tools/image_consistency.py --derive 'CMD {}'` kini mengulang derivasi itu (tidak percaya `payload.json`): **IMAGE CONSISTENT** | `evidence/readiness-s11.*/image-consistency.txt`, `tests/test_image_consistency.py` (13) |
+| Payload | `tools/payload_check.py` **PASS** lagi; layout DarwinBoot `0x4efc000` dari window `0x170000000` | `…/payload-check.txt` |
+| Peta DRAM offline | `tests/test_adt_dram.py`, `test_memory_plan.py` (termasuk sumber pipa asli: window hanya di `0xffe00000..0x280000000`), `test_payload_check.py` **OK** | lokal |
+| Boot image | 137 023 488 B ≤ `boot_b` 201 326 592 B; kernel image = BootShim + FD `bd39c37a…`; DTB = `pipa.dtb` | idem |
+| Readiness | `scripts/readiness.sh` kini menerima `--out DIR` (berulang) dan `--derive`; dengan `out-repro-v4-run2` + `payload-v4`: **NO, 1 syarat**: image root untuk partisi `ipados` tidak ada | `…/readiness.txt` |
+| MODE B | Penyebab loop dipastikan (entri Android = `reset`). Opsi baru B5 (ABL tetap memuat Android; menu lewat kernel Android yang ditambal), anggaran ruang diukur: payload harus ≤ 112 MiB | [MODE-B.md](MODE-B.md) |
+
+**Blocker berikutnya**: root iPadOS butuh partisi `ipados`, yang tidak ada di GPT stock. Membuatnya = mengecilkan
+`userdata` = data Android hilang (MODE-B.md, "Root iPadOS terpisah"); ruang kosong di akhir LUN 0 belum pernah diukur.
+Itu keputusan pemilik, bukan langkah build.
 
 ## Sesi 10 (WSL2 + GitHub Actions Intel; tidak ada boot, flash, atau perubahan slot)
 

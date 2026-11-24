@@ -1,4 +1,4 @@
-# MODE B: menu Android / iPadOS setiap tablet dinyalakan — rancangan, belum dicoba
+# MODE B: menu Android / iPadOS setiap tablet dinyalakan — rancangan, belum dicoba (audit sesi 11)
 
 | Mode | Cara | Status |
 | --- | --- | --- |
@@ -19,6 +19,25 @@ butuh handoff Android yang nyata.
 | B2. Menu di partisi `recovery` (jika ada) | `boot_a` tetap stock; menu dipanggil dengan kombinasi tombol recovery saat power-on | Apakah pipa punya `recovery_a/_b` terpisah (baca dari `scripts/dump-gpt.sh`) | Kehilangan recovery stock selama terpasang | Bukan "setiap power-on", tapi Android tidak tersentuh. Bergantung GPT |
 | B3. Slot A = Android, slot B = iPadOS | `set_active` berganti | — | OTA virtual A/B menulis slot inaktif → merusak OS kedua atau Android | **Ditolak** (`pipa_gpt.py` FAIL untuk slot inaktif) |
 | B4. Tetap dari PC | MODE A | — | Tidak ada | Aman, tapi bukan target |
+| B5. Android tetap dimuat ABL; kernel Android membawa menu (pola *dual-boot kernel patcher* komunitas WoA; sumbernya belum diaudit) | `boot_<aktif>` = boot Android stock yang kernel-nya diberi shellcode kecil di entry: tanpa tombol → lanjut ke kernel Android asli (semua `androidboot.*`, AVB, DTB/overlay tetap dari ABL); dengan tombol → lompat ke FD uefi-pipa yang ikut disematkan, lalu DarwinBoot | (a) ABL menerima kernel blob sebesar itu (batas region kernel ABL belum diukur); (b) FD bisa jalan setelah ABL sudah menyiapkan Linux (tanpa layanan ABL); (c) DarwinBoot menemukan payload bukan di ramdisk boot image (ramdisk = milik Android) | Sedang: semuanya bisa **dibuktikan dari RAM** (`fastboot boot` image Android yang ditambal; tidak menulis apa pun); OTA mengganti `boot` → menu hilang, Android tetap jalan | **Kandidat terbaik**, karena entri Android = kernel Android asli, bukan `reset` → tidak ada loop. Belum dibangun |
+
+### Audit sesi 11 (offline, tanpa tablet)
+
+Penyebab loop MODE A di flash, dipastikan: entri Android menu = `reset`; ABL lalu memuat `boot_<aktif>` lagi = menu. B1
+memindahkan semua tugas ABL ke firmware kita (paling berisiko). B5 membiarkan ABL tetap memuat Android dan hanya
+menyisipkan percabangan di entry kernel Android.
+
+Anggaran ruang B5, diukur dari OTA resmi `OS2.0.16.0.UMZMIXM` (`boot.img` header v3, kernel Image mentah 52 826 128 B,
+ramdisk 20 159 971 B) dan FD `bd39c37a…` (3 145 728 B), halaman 4 KiB, `boot_b` = 201 326 592 B:
+
+| Isi `boot_<aktif>` | Ukuran | Muat? |
+| --- | --- | --- |
+| kernel Android + FD + ramdisk Android + payload 128 MiB sekarang | 210 358 272 B | **tidak** (lebih 8,6 MiB) |
+| sisa untuk payload | 119,4 MiB | payload ≤ 112 MiB (isi yang dipakai DarwinBoot sekarang ≈ 79 MiB, `0x4efc000`) |
+
+Yang belum diketahui dan harus dibuktikan dari RAM, berurutan: (1) image Android stock yang hanya ditambal (tanpa FD)
+boot sampai home screen lewat `fastboot boot`; (2) dengan FD + tombol, menu uefi-pipa muncul; (3) DarwinBoot memuat
+payload dari tempat baru. Root iPadOS tetap butuh partisi `ipados` (bagian bawah): MODE B tanpa root itu hanya menu.
 
 Urutan pembuktian sebelum B1: (1) MODE A berhasil dan kembali ke Android; (2) dari RAM, firmware memuat Android stock
 sampai home screen (dengan `boot_<aktif>` tetap stock); (3) backup boot-chain terverifikasi (`backup-readiness.sh`);

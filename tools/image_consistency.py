@@ -3,11 +3,14 @@
 strings look right.
 
   image_consistency.py --image BOOT.img --kernel kernel.macho --firmware SILICIUM_UEFI.fd --payload payload.img
-                       [--manifest MANIFEST.json]
+                       [--manifest MANIFEST.json] [--derive 'CMD {}']...
 
 Checks, each PASS or FAIL:
   - the image's ramdisk is byte-for-byte payload.img;
-  - the payload volume's EFI/UniXNU/Payloads/kernel.macho is byte-for-byte kernel.macho;
+  - the payload volume's EFI/UniXNU/Payloads/kernel.macho is byte-for-byte kernel.macho -- or, with --derive, byte-for-byte
+    what the given commands make of a copy of kernel.macho, run in order ({} = the copy). UniXNU's payload step rewrites
+    the kernel it packs (scripts/unixnu/payload.py: patch-xnu-entry-probe.py for the panic screen / entry probe, and the
+    corecrypto seal); the derivation is repeated here, never taken from payload.json;
   - the image's kernel (gzip of BootShim + firmware) contains the firmware volume whole, at the end;
   - with --manifest: the kernel, firmware, payload and image digests are the ones the build recorded;
   - the image is not larger than the boot partition (--max-bytes, default the 8 GB unit's boot_b 0xC000000): ABL refuses a
@@ -16,6 +19,10 @@ Exit 0 only when every check passes.
 """
 import argparse
 import gzip
+import os
+import shlex
+import subprocess
+import tempfile
 import zlib
 import hashlib
 import json
@@ -34,7 +41,22 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def check(image, kernel, firmware, payload, manifest=None, max_bytes=BOOT_B_BYTES, dtb=None):
+def derive(kernel, commands):
+    """Run each command on a private copy of kernel ({} = its path), in order; return the copy's bytes."""
+    with tempfile.TemporaryDirectory(prefix='derive-') as d:
+        copy = Path(d) / 'kernel.macho'
+        copy.write_bytes(kernel)
+        for command in commands:
+            argv = [str(copy) if a == '{}' else a for a in shlex.split(command)]
+            if str(copy) not in argv:
+                raise ValueError(f'--derive {command!r} has no {{}} for the kernel copy')
+            r = subprocess.run(argv, capture_output=True, text=True, env=os.environ.copy())
+            if r.returncode != 0:
+                raise ValueError(f'--derive {command!r} failed ({r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}')
+        return copy.read_bytes()
+
+
+def check(image, kernel, firmware, payload, manifest=None, max_bytes=BOOT_B_BYTES, dtb=None, derived=None, steps=0):
     results = []
     say = lambda ok, text: results.append(('PASS' if ok else 'FAIL', text))
     say(len(image) <= max_bytes, f'image {len(image)} B fits the boot partition ({max_bytes} B)')
@@ -54,7 +76,11 @@ def check(image, kernel, firmware, payload, manifest=None, max_bytes=BOOT_B_BYTE
     say(ramdisk == payload, f'ramdisk is payload.img ({digest(ramdisk)[:16]} / {digest(payload)[:16]})')
     try:
         inner = Fat(ramdisk).read('EFI/UniXNU/Payloads/kernel.macho')
-        say(inner == kernel, f'payload kernel.macho is the built kernel ({digest(inner)[:16]} / {digest(kernel)[:16]})')
+        if derived is None:
+            say(inner == kernel, f'payload kernel.macho is the built kernel ({digest(inner)[:16]} / {digest(kernel)[:16]})')
+        else:
+            say(inner == derived, f'payload kernel.macho is the built kernel {digest(kernel)[:16]} after the {steps} --derive '
+                                  f'step(s) ({digest(inner)[:16]} / {digest(derived)[:16]})')
     except FatError as error:
         say(False, f'payload volume: {error}')
     # UniXNU bootimg.py: kernel = gzip(BootShim + FD) followed by the device tree (Image.gz-dtb); only the first gzip
@@ -93,10 +119,19 @@ def main(argv):
     ap.add_argument('--manifest', type=Path)
     ap.add_argument('--max-bytes', type=lambda v: int(v, 0), default=BOOT_B_BYTES)
     ap.add_argument('--dtb', type=Path, help='the device tree bootimg appended (pipa: uefi-pipa Resources/DTBs/pipa.dtb)')
+    ap.add_argument('--derive', action='append', default=[],
+                    help='a command the payload step ran on the kernel, {} = the kernel copy (repeatable, in order)')
     a = ap.parse_args(argv)
     manifest = json.loads(a.manifest.read_text()) if a.manifest else None
-    results = check(a.image.read_bytes(), a.kernel.read_bytes(), a.firmware.read_bytes(), a.payload.read_bytes(), manifest, a.max_bytes,
-                    a.dtb.read_bytes() if a.dtb else None)
+    kernel = a.kernel.read_bytes()
+    try:
+        derived = derive(kernel, a.derive) if a.derive else None
+    except ValueError as error:
+        print(f'FAIL  {error}')
+        print('IMAGE NOT CONSISTENT')
+        return 1
+    results = check(a.image.read_bytes(), kernel, a.firmware.read_bytes(), a.payload.read_bytes(), manifest, a.max_bytes,
+                    a.dtb.read_bytes() if a.dtb else None, derived, len(a.derive))
     for level, text in results:
         print(f'{level:5} {text}')
     bad = any(level == 'FAIL' for level, _ in results)
