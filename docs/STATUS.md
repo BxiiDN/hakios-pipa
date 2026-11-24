@@ -9,6 +9,15 @@ Dua status terpisah, tidak pernah disamakan:
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
 
+## Sesi 21b (percobaan instalasi pertama, bertahap, disetujui)
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| GPT Rancangan B ditulis | OKAY, terverifikasi setelah restart; **dikembalikan** ke tabel asli |
+| erase metadata + userdata | OKAY; boot lalu ditolak (`LoadImageAndAuth Fail`, "Device Error") |
+| Pemulihan | `fastboot set_active b` → Android boot normal (N0, `_b`) |
+| Pelajaran | setelah erase selalu `set_active b` (seperti skrip porter) |
+
 ## Sesi 21 (RAM-boot MODE A v9 read-only, disetujui; tidak ada tulisan ke tablet)
 
 | Pemeriksaan | Hasil |

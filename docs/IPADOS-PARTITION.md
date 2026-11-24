@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–21)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–22)
 
 **Status (24 Nov, terukur di tablet): LUN 0 tidak punya ruang kosong; Rancangan A tidak mungkin. Belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -447,3 +447,30 @@ Android (cara yang sudah terbukti); (3) jangan memilih entri iPadOS (belum ada `
   image MODE A v10 dengan GPT baru → PASS.
 - B5 di atas `boot_b` N0 (`--require-installed`): 176 832 512 B (`31ad7b77…`), sisa 24,5 MB; `final_verify.py` **21/21**.
 - `design_b_readiness.py`: 1–2 WAIVED, 3 PASS (boot chain terpasang persis), 4 PASS, 5 PASS, 6 BLOCKED (persetujuan).
+
+## 15. Percobaan instalasi pertama (sesi 21, bertahap, disetujui pemilik) — dibatalkan dengan aman
+
+| Langkah | Hasil |
+| --- | --- |
+| 1 preflight | Android normal, baterai 88 %, slot `b` sehat |
+| 2 GPT Rancangan B | `fastboot flash partition:0` (`13763adc…`) OKAY; ABL membaca tabel baru hanya setelah restart (Power + Vol−): `userdata` 0x3370700000, `ipados` 0x5000FB000 |
+| 3 erase | `fastboot erase metadata`, `fastboot erase userdata` OKAY (data Android hilang, sesuai keputusan pemilik) |
+| 4 first boot | **gagal**: ABL jatuh ke fastboot, `oem fbreason` = `LoadImageAndAuth Fail` |
+
+- Diagnosis (semua tanpa menulis): `fastboot continue`, `fastboot boot` `boot_b` asli dari dump, dan `fastboot boot` v9
+  (diterima lima kali pada hari yang sama) semuanya ditolak `Failed to load/authenticate boot image: Device Error`.
+  Slot `b` tetap not unbootable, retry 6. Di ABL, kegagalan AVB pada perangkat unlocked menghasilkan status lain dan
+  boot diteruskan, jadi "Device Error" berasal dari tahap umum `LoadImageAndAuth`, bukan dari image.
+- GPT asli dipulihkan (`fastboot flash partition:0`, `2d74d50c…` = sektor dump) dan terverifikasi setelah restart: kegagalan
+  tetap → GPT bukan penyebab.
+- **Perbaikan: `fastboot set_active b`** (slot sama; atribut slot di-reset: retry 7, successful no) — langkah yang selalu
+  dijalankan `FlashLinux.sh` porter setelah `erase metadata/userdata`. Setelah itu boot normal berhasil: Android first boot,
+  kernel N0, slot `_b`, verified boot orange, `/data` di tabel asli.
+- Satu transfer `fastboot boot` sempat putus (`AdbWriteEndpointSync … semaphore timeout`); setelah kabel dicabut, restart
+  Power + Vol−, dan port USB lain, transfer berikutnya normal.
+
+**Aturan untuk instalasi berikutnya:** setelah `erase metadata` + `erase userdata`, selalu `fastboot set_active b` sebelum
+boot pertama; uji boot dengan menahan Power (bukan `fastboot reboot`, bukan `fastboot continue` — perintah itu tidak
+menjalankan boot normal di ABL ini). Urutan baru: GPT → restart Power + Vol− → verifikasi `getvar` → erase → `set_active b`
+→ Power-hold → Android first boot → flash root `ipados` → flash B5 `boot_b` → init Data. GPT Rancangan B saat ini **tidak**
+terpasang (tabel asli).
