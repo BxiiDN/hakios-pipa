@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–14)
 
 **Status: belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -10,7 +10,7 @@ diformat, atau dihapus oleh apa pun di repo ini.
 | --- | --- |
 | `adb shell ls -l /dev/block/by-name` | 6 LUN UFS (`sda`–`sdf`), 124 nama. LUN 0 (`sda`): 34 partisi, `userdata` = `sda34` (nomor tertinggi), `metadata` = `sda18`, `super` = `sda29`. Slot aktif `_b` (`ro.boot.slot_suffix`). Pemetaan lengkap disimpan privat (`~/.hakios-private/gpt-sysfs.*`) |
 | `/sys/block/*/size`, `/proc/partitions`, descriptor UFS (`geometry_descriptor`, `unit_descriptor/logical_block_count`) | **ditolak SELinux** untuk shell: ukuran LUN, offset, dan ruang kosong tidak terbaca |
-| `dumpsys diskstats` | `/data` 236 722 156 KiB, terpakai 30 543 376 KiB (13 %); FBE aktif; partisi metadata 53 232 KiB |
+| `dumpsys diskstats` | ukuran `/data` cocok dengan `userdata`; FBE aktif (pemakaian data tidak dicatat di repo) |
 | `board.toml` (pengukuran unit ini, Nov 2026) | `userdata` LBA 4 KiB `0x293000..0x3b037fa` (242,4 GB); awal sama dengan unit 128 GB → hanya ujungnya yang membesar |
 | OTA resmi OS2.0.16, metadata partisi dinamis | grup `qti_dynamic_partitions` maks 9 122 611 200 B; isi 6 282 592 256 B → sisa ≈ 2,65 GiB di `super`, dipakai Virtual A/B saat OTA |
 
@@ -66,7 +66,7 @@ Aturan `NativeUfs native_ufs_store_open` + `PersistOverlay.h`, blok 4 KiB:
 | **20 GiB (disarankan, `plans/ipados-*.json`)** | minimum + 2,2 GiB sisa; Data iPadOS tetap 8 GiB (ditentukan seed `data.dbr`) |
 | 48 GiB | bila kelak Data 32 GiB: butuh seed baru (macOS `hdiutil`), minimum 41,81 GiB |
 
-Dampak ke Android pada rancangan B: `userdata` 242,4 GB → ±220,9 GB; pemakaian sekarang 31,3 GB.
+Dampak ke Android pada rancangan B: `userdata` 242,4 GB → ±220,9 GB (pemakaian saat ini dicatat privat, jauh di bawah itu).
 
 ## 4. Rancangan partisi
 
@@ -96,7 +96,7 @@ Xiaomi (`rawdump`, `cust`, `rescue`, `bk0x`), file di `userdata` (ciphertext), U
 | Apa | Cara tanpa root | Verifikasi |
 | --- | --- | --- |
 | Aplikasi + datanya | Backup & restore bawaan HyperOS (cadangan lokal) → `/sdcard/MIUI/backup/AllBackup/…`, lalu salin ke PC | pulihkan satu aplikasi uji dari cadangan itu sebelum langkah tulis |
-| Penyimpanan internal (foto, dokumen, unduhan; ±31 GB) | `adb pull /sdcard/` ke PC (ruang kosong WSL 768 GB) | daftar file + SHA-256 di PC, dibandingkan ulang |
+| Penyimpanan internal (foto, dokumen, unduhan) | `adb pull /sdcard/` ke PC (ruang kosong WSL 768 GB) | daftar file + SHA-256 di PC, dibandingkan ulang |
 | Akun & sinkronisasi | Google / Mi Cloud | login uji di perangkat lain |
 | Aplikasi dengan kunci sendiri (2FA, bank, chat) | ekspor/backup milik aplikasi itu (contoh: cadangan WhatsApp, kode pemulihan authenticator) | dicatat pemilik |
 | GPT semua LUN | dump pembaca (bagian 2): primer + cadangan per LUN | `gpt_capacity.py`: CRC dan salinan entri |
@@ -121,3 +121,62 @@ lagi: sekarang data Android harus aman, jadi backup di atas dijalankan pemilik (
 2. Bila A memungkinkan: membuat dan menulis GPT LUN 0 dengan entri `ipados`, setelah backup GPT ada.
 3. Bila tidak: keputusan pemilik tentang B, **setelah** backup bagian 5 selesai dan satu pemulihan uji berhasil.
 4. Menulis image root ke `ipados` (driver menolak jendela tulis pada partisi bernama `userdata`).
+
+## 8. Sesi 14: preflight pembaca terhadap ROM yang terpasang
+
+### ROM terpasang (adb + `fastboot getvar`, read-only; data mentah di `~/.hakios-private`, tidak di Git)
+
+| Fakta | Nilai |
+| --- | --- |
+| ROM | custom/port dari Xiaomi Pad 8/8 Pro (keterangan pemilik); `OS4.0.8.0.XPZCNXM`, Android 17; tidak ada rilis resmi pipa dengan versi ini |
+| Kernel | `5.10.241 #18 SMP PREEMPT Thu Oct 29 19:56:25 CST 2026` (`ro.kernel.version` tetap `4.19`); `CONFIG_IKCONFIG_PROC=y` |
+| Driver yang dibutuhkan pembaca | built-in: UFS QCOM, configfs, mass storage gadget, initrd gzip/lz4, pstore/ramoops, msm_poweroff; `CONFIG_DEVTMPFS` tidak ada (pembaca membuat node sendiri) |
+| Boot | `ro.boot.dtb_idx=0`, `ro.boot.dtbo_idx=9`, `verifiedbootstate=orange`, `ro.boot.vbmeta.digest` kosong (AVB tidak bisa menjamin image) |
+| Slot | `current-slot:b`; b: successful=yes, unbootable=no, retry 6; **a: successful=no** (bukan cadangan yang terbukti) |
+| Fastboot | `max-download-size` 805 306 368; `anti:1`; `unlocked:yes`; `snapshot-update-status:none` |
+| Data | pemakaian `/data` sama sebelum dan sesudah pemulihan (angka disimpan privat) |
+
+### Kejadian `fastboot reboot` (24 Nov)
+
+`adb reboot bootloader` → `getvar all` → `fastboot reboot`: tablet berhenti di logo, pulih dengan menahan Power 15–20 s
+(reset PMIC), lalu boot normal; `persist.sys.boot.reason.history` = `bootloader,…`. Tidak ada `SYSTEM_LAST_KMSG`,
+`SYSTEM_RESTART`, atau log kernel awal yang tersisa, jadi **penyebabnya tidak terbukti**. Fakta: dua reboot dari Android
+(`reboot,userrequested`) normal; yang macet hanya restart dari mode fastboot ABL. Konsekuensi: alur uji tidak lagi
+diakhiri `fastboot reboot`; pembaca kini mematikan tablet setelah kabel USB dicabut, lalu pemilik menyalakan dengan Power.
+
+### Preflight image pembaca lama: TIDAK LULUS
+
+Image `a7fa37bb…` memakai kernel 4.19 dan DTB dasar kona OS2.0.16 (`board-id <0 0>`): ABL wajib menerapkan `dtbo_b` ROM
+port (dibuat untuk DTB 5.10) dan, bila overlay gagal, menghentikan boot (ABL `.text 0x17394`). Ditandai
+`DO-NOT-USE.txt`, tidak dihapus. `tools/rom_match.py` menolaknya (banner, uname -v, config tertanam).
+
+### Pembaca yang disesuaikan (offline, siap begitu image ROM port ada)
+
+- `build-gpt-reader.py` menerima boot/vendor_boot **v3 dan v4**, menyimpan kernel dan DTB **byte-identik** (tanpa edit
+  warm-reboot), dan **menolak membangun** kecuali `tools/rom_match.py` PASS terhadap `/proc/config.gz`, `uname -r`,
+  `uname -v` tablet. Dengan kernel + DTB milik ROM sendiri, ABL menerapkan `dtbo_b` miliknya sendiri, sama seperti boot
+  normal.
+- Init berakhir dengan power-off (setelah kabel dicabut), bukan restart ke fastboot.
+- Tes: `test_rom_match.py` (7), `test_gpt_reader_build.py` (v4 ujung-ke-ujung), `test_gpt_reader_source.py` (6).
+
+Sumber image yang benar: **paket ROM port yang dulu di-flash pemilik** (`boot.img`, `vendor_boot.img`, `dtbo.img`). Image
+versi lain hanya dipakai bila `rom_match.py` PASS. Paket yang sama sekaligus jadi backup pemulihan `boot_b`/`vendor_boot_b`/
+`dtbo_b` lewat fastboot.
+
+### Jalur alternatif tanpa image ROM port (belum dibuat)
+
+`pipa.dtb` uefi-pipa khusus papan (`msm-id 0x164/0x20001`, `board-id 0x34`); bila ABL menganggapnya "Exact DTB match", ABL
+melewati dtbo, dan firmware MODE A tidak bergantung pada kernel/dtbo ROM port (image MODE A sudah boot di unit ini di
+bawah ROM sebelumnya). Firmware itu punya UFS lewat UEFI dan menu Tools berbasis plugin (`UniXNUMenuPlugin.h`): sebuah
+plugin read-only bisa menampilkan GPT LUN 0 (ukuran LUN, partisi terakhir, ruang kosong) di layar. Butuh plugin baru +
+build firmware + persetujuan RAM-boot.
+
+### Apakah ROM custom ini bisa dipertahankan untuk dual boot?
+
+| Bagian | Bergantung pada ROM Android? | Penilaian |
+| --- | --- | --- |
+| iPadOS (kernel tahap B, payload, GPU addon, DarwinBoot) | tidak: jalan dari firmware sendiri, DTB `pipa.dtb` | tetap |
+| MODE A (`fastboot boot`) | hampir tidak (DTB khusus papan); `dtbo_b` port belum terbukti dilewati | uji RAM diperlukan |
+| B5 (menu di `boot_b`) | ya: shim masuk ke kernel 5.10 port; pemilih `bootargs` cocok dengan ABL OS2.0.16 (tanpa bootconfig) | layak, tapi butuh `boot.img` port asli dan diulang tiap update ROM port |
+| Partisi `ipados` | tidak (GPT) | masalah ruang tetap sama |
+| Pemulihan | ya: tanpa paket ROM port tidak ada image `boot_b` untuk dipulihkan | **blocker** |

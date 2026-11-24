@@ -21,9 +21,8 @@ class CompiledSource(unittest.TestCase):
                                  capture_output=True, text=True, check=True).stdout
         cls.raw = SRC.read_text()
 
-    def test_data_and_power_off_modes_are_not_compiled(self):
+    def test_data_mode_is_not_compiled(self):
         self.assertNotIn('copy_data', self.src)
-        self.assertNotIn('power_off_unplugged', self.src)
         self.assertIn('copy_gpt', self.src)
 
     def test_writable_opens_are_ram_or_pseudo_files(self):
@@ -49,6 +48,12 @@ class CompiledSource(unittest.TestCase):
         self.assertNotRegex(body, r'OWronly|ORdwr|SysWrite\b|SysPwrite64, d')
         self.assertLess(body.index('BLKROSET_G'), body.index('SysPread64G'))
         self.assertLess(body.index('if (ro != 1)'), body.index('SysPread64G'))
+
+    def test_ends_with_power_off_not_a_fastboot_restart(self):
+        start = self.src[self.src.index('void start(void)'):]
+        self.assertIn('power_off_unplugged();', start)
+        self.assertNotIn('reboot_bootloader();', start)
+        self.assertIn('0x4321fedc', self.src)                       # LINUX_REBOOT_CMD_POWER_OFF
 
     def test_only_pseudo_file_systems_are_mounted(self):
         mounts = re.findall(r'SysMount, \(long\)"([^"]+)"', self.src)

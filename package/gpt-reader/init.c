@@ -485,7 +485,7 @@ static long copy_gpt(void)
 }
 #endif
 
-static void reboot_bootloader(void)
+__attribute__((unused)) static void reboot_bootloader(void)
 {
   sys(SysSync, 0, 0, 0, 0, 0);
   sys(SysReboot, (long)0xfee1dead, 672274793, (long)0xa1b2c3d4, (long)"bootloader", 0);
@@ -495,7 +495,7 @@ static void reboot_bootloader(void)
 // shutdown (fastboot oem poweroff answers OKAY and does nothing on this tablet, and a long power press is a hard reset), for leaving
 // it off after a session. It waits until the USB cable is out: with VBUS present the PMIC powered the tablet straight back on and the
 // bootloader, finding no Android to charge under, went to recovery (2026-10-26). After POWER_OFF_WAIT_S it powers off anyway.
-#ifdef READER_POWER_OFF
+#if defined(READER_POWER_OFF) || defined(READER_GPT)
 #define POWER_OFF_WAIT_S 600
 // VBUS as the charger driver (qpnp-smb5) sees it: "present" follows the plug, "online" also wants a known charger type.
 #define USB_PRESENT "/sys/class/power_supply/usb/present"
@@ -588,8 +588,16 @@ __attribute__((noreturn)) void start(void)
     long n = read_file(LUN "/file", file, sizeof(file));
     if (n >= 0 && (n == 0 || file[0] == '\n')) break;   // the host ejected the medium
   }
+#ifdef READER_GPT
+  // hakios-pipa: no restart into fastboot (a `fastboot reboot` on the installed port ROM stopped at the logo, 2026-11-24). The
+  // tablet powers off once the USB cable is out (or after POWER_OFF_WAIT_S); the owner starts Android with the power key.
+  put(waited < WAIT_S ? "ejected by the host" : "timeout"); put("; powering off when the USB cable is out\n");
+  flush_status();
+  power_off_unplugged();
+#else
   put(waited < WAIT_S ? "ejected by the host" : "timeout"); put("; restarting into fastboot\n");
   flush_status();
   reboot_bootloader();
+#endif
   for (;;) sys(SysExit, 1, 0, 0, 0, 0);
 }

@@ -5,10 +5,12 @@ package/linux-log/build-log-reader.py (11cd2f8); the init (init.c next to this f
 The image is the tablet's own kernel (header v3 boot image) and device trees (header v3 vendor_boot) in a header v2 image, booted
 from RAM with `fastboot boot` -- nothing is flashed. The init records every UFS LUN's primary GPT, backup GPT and size into LOG.BIN
 of a FAT image after opening each disk O_RDONLY with BLKROSET (a disk that does not read back BLKROGET=1 is skipped unread), offers
-that image to the host as a read-only USB disk, and restarts into fastboot when the host ejects it or after 60 s.
-Every device tree that has /soc/restart@c264000 gets qcom,force-warm-reboot unless --cold is given.
+that image to the host as a read-only USB disk, and then powers off.
+The device trees are those of the vendor_boot given, unmodified. The reader ends by powering the tablet off once the USB cable is
+out (not by restarting into fastboot: a `fastboot reboot` on the installed port ROM stopped at the logo, 2026-11-24).
 
-usage: build-gpt-reader.py --boot boot.img --vendor-boot vendor_boot.img --out gpt-reader.img [--cold]"""
+usage: build-gpt-reader.py --boot boot.img --vendor-boot vendor_boot.img --out gpt-reader.img --config config.gz --uname-r R --uname-v V
+The boot and vendor_boot images must first pass tools/rom_match.py against the installed ROM."""
 import argparse
 import gzip
 import hashlib
@@ -20,14 +22,15 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+import sys  # noqa: E402
+sys.path.insert(0, str(HERE.parent.parent / 'tools'))
+import rom_match  # noqa: E402
 LLVM = Path('/opt/homebrew/opt/llvm/bin')
 LOG_BYTES = 8 * 1024 * 1024
 STATUS_BYTES = 4096
 IMAGE_SECTORS = 10 * 2048          # 10 MiB: LOG.BIN, STATUS.TXT and the FAT16 metadata
 VOLUME = 'PIPALOG'                 # not the TB128FU reader's UNIXNULOG: both tablets can be read on the same Mac at once
 PAGE = 4096                        # header v3 images have a fixed 4096-byte page; the output keeps it
-RESTART = '/soc/restart@c264000'
-WARM = 'qcom,force-warm-reboot'
 
 
 def tool(name):
@@ -137,11 +140,12 @@ def read_boot_v3(path):
         raise SystemExit(f'{path}: not an Android boot image')
     kernel_size, ramdisk_size, os_version, header_size = struct.unpack_from('<4I', boot, 8)
     version, = struct.unpack_from('<I', boot, 40)
-    if version != 3:
-        raise SystemExit(f'{path}: expected header v3, found v{version}')
+    if version not in (3, 4):
+        raise SystemExit(f'{path}: expected header v3 or v4, found v{version}')
     kernel = boot[PAGE:PAGE + kernel_size]
-    if len(kernel) != kernel_size or kernel[0x38:0x3c] != b'ARMd':
-        raise SystemExit(f'{path}: truncated, or the kernel is not an arm64 Image')
+    # kept byte for byte as the installed boot image has it: an arm64 Image, or the gzip that ABL decompresses itself
+    if len(kernel) != kernel_size or not (kernel[0x38:0x3c] == b'ARMd' or kernel[:2] == b'\x1f\x8b'):
+        raise SystemExit(f'{path}: truncated, or the kernel is neither an arm64 Image nor gzip')
     return kernel, os_version
 
 
@@ -151,8 +155,9 @@ def read_vendor_boot_v3(path):
     if vb[:8] != b'VNDRBOOT':
         raise SystemExit(f'{path}: not a vendor_boot image')
     version, page, kernel_addr, ramdisk_addr, ramdisk_size = struct.unpack_from('<5I', vb, 8)
-    if version != 3 or page != PAGE:
-        raise SystemExit(f'{path}: expected header v3 with 4096-byte pages')
+    # v4 adds the vendor ramdisk table and bootconfig after the v3 fields; the device tree still follows the whole ramdisk
+    if version not in (3, 4) or page != PAGE:
+        raise SystemExit(f'{path}: expected header v3 or v4 with 4096-byte pages')
     cmdline = vb[28:28 + 2048].split(b'\0')[0]
     tags_addr, = struct.unpack_from('<I', vb, 2076)
     header_size, dtb_size = struct.unpack_from('<II', vb, 2096)
@@ -175,30 +180,22 @@ def split_dtbs(blob):
     return out
 
 
-def warm_dtbs(dtbs, work):
-    """The device trees with qcom,force-warm-reboot on the restart node; trees without that node (the RTIC blob) stay as they are."""
-    out, changed = [], 0
-    for i, dtb in enumerate(dtbs):
-        path = work / f'{i}.dtb'
-        path.write_bytes(dtb)
-        if subprocess.run([tool('fdtget'), '-t', 's', path, RESTART, 'compatible'], capture_output=True, text=True).stdout.strip() != 'qcom,pshold':
-            out.append(dtb)
-            continue
-        subprocess.run([tool('fdtput'), '-t', 'x', path, RESTART, WARM], check=True)
-        out.append(path.read_bytes())
-        changed += 1
-    if not changed:
-        raise SystemExit(f'no device tree has {RESTART}')
-    return out, changed
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--boot', required=True, type=Path, help="the tablet's own boot image (header v3)")
     ap.add_argument('--vendor-boot', required=True, type=Path, help="the tablet's own vendor_boot image (header v3)")
     ap.add_argument('--out', required=True, type=Path)
-    ap.add_argument('--cold', action='store_true', help='keep the stock hard reset when the reader restarts')
+    ap.add_argument('--config', required=True, type=Path, help="the tablet's /proc/config.gz (adb, read-only)")
+    ap.add_argument('--uname-r', required=True, help="the tablet's uname -r")
+    ap.add_argument('--uname-v', required=True, help="the tablet's uname -v")
     a = ap.parse_args()
+    # The reader must run the installed ROM's own kernel and device trees (tools/rom_match.py); anything else is refused.
+    match = rom_match.check(boot=a.boot.read_bytes(), vendor=a.vendor_boot.read_bytes(), config=a.config.read_bytes(),
+                            uname_r=a.uname_r, uname_v=a.uname_v)
+    for level, text in match:
+        print(f'{level:4} {text}')
+    if any(level == 'FAIL' for level, _ in match):
+        raise SystemExit('refused: these images are not the installed ROM (tools/rom_match.py)')
     kernel, os_version = read_boot_v3(a.boot)
     cmdline, kernel_addr, ramdisk_addr, tags_addr, dtb_addr, dtb_section = read_vendor_boot_v3(a.vendor_boot)
     if len(cmdline) > 512 + 1024 - 1:
@@ -207,10 +204,10 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         dtbs = split_dtbs(dtb_section)
-        changed = 0
-        if not a.cold:
-            dtbs, changed = warm_dtbs(dtbs, work)
+        changed = 0      # the device trees are the installed ones, unmodified (docs/IPADOS-PARTITION.md, session 14)
         dtb = b''.join(dtbs)
+        if dtb != dtb_section:
+            raise SystemExit('the device tree section does not split back into itself')
         init = build_init(work)
         image, offsets = build_image(work)
     entries = [(d, 0o40755, 0, 0, b'') for d in ('dev', 'sys', 'proc')]
