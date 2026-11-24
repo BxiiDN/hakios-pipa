@@ -14,7 +14,7 @@
     - primary GPT at LBA 1: signature, header size, header CRC32 and entry-array CRC32 as computed here; backup header
       at the last LBA naming itself and LBA 1;
     - lun0: 253 461 790 720 bytes, 34 partitions, userdata = LBA 0x293000 .. 61880314 (the layout measured on
-      2026-11-24); boot: partitions boot_a, boot_b, vendor_boot_b, dtbo_b, vbmeta_b, abl_b, xbl_b present.
+      2026-11-24); boot: 65 partitions with boot_a, boot_b, vendor_boot_b, dtbo_b, vbmeta_b, abl_b (xbl is on LUN 1/2).
   Every file gets a SHA-256 line in SHA256SUMS.txt. Then, in WSL: python3 tools/usb_dump_check.py DIR ...
 #>
 param(
@@ -27,7 +27,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Lun0Bytes = [int64]253461790720
-$BootNames = @('boot_a', 'boot_b', 'vendor_boot_b', 'dtbo_b', 'vbmeta_b', 'abl_b', 'xbl_b')
+$BootNames = @('boot_a', 'boot_b', 'vendor_boot_b', 'dtbo_b', 'vbmeta_b', 'abl_b')   # all on sde; xbl_a/b are on LUN 1/2
+$BootParts = 65                                                                     # sde in /dev/block/by-name
 
 $CrcTable = New-Object 'uint32[]' 256
 for ($n = 0; $n -lt 256; $n++) {
@@ -96,9 +97,12 @@ function Get-Identity([int]$n) {
       if ($id.Size -eq $Lun0Bytes -and $parts -eq 34 -and $u[0] -eq 0x293000 -and $u[1] -eq 61880314 -and $lastUsable -eq 61880314) {
         $id.Kind = 'lun0'; $id.UserdataFirst = $u[0]; $id.Why = 'pipa LUN 0 (measured layout)'
       } else { $id.Why = "has userdata, but not the measured LUN 0 (size $($id.Size), $parts partitions, userdata $($u[0])..$($u[1]))" }
-    } elseif (@($BootNames | Where-Object { -not $names.ContainsKey($_) }).Count -eq 0) {
-      $id.Kind = 'boot'; $id.Why = "pipa boot LUN ($parts partitions)"
-    } else { $id.Why = 'GPT of another disk' }
+    } else {
+      $missing = @($BootNames | Where-Object { -not $names.ContainsKey($_) })
+      if ($missing.Count -eq 0 -and $parts -eq $BootParts) {
+        $id.Kind = 'boot'; $id.Why = "pipa boot LUN ($parts partitions)"
+      } else { $id.Why = "GPT of another disk ($parts partitions; missing: $($missing -join ', '))" }
+    }
   } finally { $s.Close() }
   return $id
 }
@@ -121,14 +125,14 @@ function Copy-Range([int64]$offset, [int64]$length, [string]$file) {
   $dst = [System.IO.File]::Open((Join-Path $Out $file), [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
   $buf = New-Object byte[] (16MB)
   $stream.Position = $offset
-  $left = $length
+  [int64]$left = $length
   while ($left -gt 0) {
-    $n = [int][math]::Min($buf.Length, $left)
+    $n = [int][math]::Min([int64]$buf.Length, [int64]$left)       # Int64: disks are larger than 2 GiB
     $got = $stream.Read($buf, 0, $n)
     if ($got -le 0) { throw "short read at $($offset + $length - $left)" }
     $dst.Write($buf, 0, $got)
     $left -= $got
-    Write-Progress -Activity $file -PercentComplete ([int](100 * ($length - $left) / $length))
+    Write-Progress -Activity $file -PercentComplete ([int](100 * ([double]($length - $left)) / [double]$length))
   }
   $dst.Close()
 }

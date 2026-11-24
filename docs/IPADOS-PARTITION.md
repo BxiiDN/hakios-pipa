@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–20)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–21)
 
 **Status (24 Nov, terukur di tablet): LUN 0 tidak punya ruang kosong; Rancangan A tidak mungkin. Belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -428,3 +428,22 @@ Risiko dan pemulihan: (1) ABL menolak image → slot `_b` bisa ditandai unbootab
 terpisah); (2) `UsbMsdDxe` (biner Qualcomm) macet atau Windows meminta "format" → batalkan; tahan Power 15–20 s →
 Android (cara yang sudah terbukti); (3) jangan memilih entri iPadOS (belum ada `ipados`: panic → restart otomatis
 → Android) atau Restart; (4) dump berisi `persist`/`modemst` (data kalibrasi): hanya di `~/.hakios-private`.
+
+## 14. Sesi 21: dump read-only dari tablet (RAM-boot MODE A v9, disetujui pemilik)
+
+- Preflight: Android normal (kernel N0, `RUNNING_UNLOCKED`), baterai 88 %, slot `b` successful / not unbootable / retry 6,
+  v9 `a1ce6a26…` = catatan (dicek ulang sebelum setiap `fastboot boot`). `fastboot oem device-info`: **Device critical
+  unlocked: true** (tidak ada unlock yang dilakukan). Slot tidak pernah berubah selama sesi.
+- Kejadian: entri menu "Android / HyperOS" = reset, dan selama sesi (`adb reboot bootloader`) ABL membawa reset itu ke
+  fastboot — tiga kali; tidak ada kerusakan. Alat USB kedua dalam satu boot tidak menyala (UsbMsdDxe tidak bisa
+  di-start ulang setelah `StopDevice`); LUN 0 diambil di boot terpisah. Dua bug `dump-pipa-usb.ps1` tertangkap di
+  perangkat dan diperbaiki dengan uji PowerShell: `xbl_b` ada di LUN 2 (bukan boot LUN) dan `[math]::Min` Int32 untuk
+  disk > 2 GiB.
+- Hasil (`~/.hakios-private/usb-dump-s21.*`, tidak di Git): `boot-lun.img` 2 281 701 376 B (65 partisi),
+  `lun0-head.img` 11 056 185 344 B (sampai awal `userdata`), `lun0-tail.bin`. `usb_dump_check.py`: SHA-256, kedua GPT,
+  tata letak terukur, `super` liblp, `rom_match` → **RECOVERY SET VERIFIED**. `boot_b` = kernel N0 terpasang
+  (banner = `/proc/version`); `vendor_boot_b`/`dtbo_b` terpasang berbeda dari paket porter (dump ini yang dipakai).
+- GPT asli → `gpt_rewrite.py`: 53 byte berubah per salinan, `ipados` 56 637 184..61 880 314; `image_root_check.py`
+  image MODE A v10 dengan GPT baru → PASS.
+- B5 di atas `boot_b` N0 (`--require-installed`): 176 832 512 B (`31ad7b77…`), sisa 24,5 MB; `final_verify.py` **21/21**.
+- `design_b_readiness.py`: 1–2 WAIVED, 3 PASS (boot chain terpasang persis), 4 PASS, 5 PASS, 6 BLOCKED (persetujuan).

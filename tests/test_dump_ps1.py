@@ -45,8 +45,10 @@ class DumpScript(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp(dir=Path.home()))      # inside WSL's file system, reachable from Windows
         disk([(p['name'], p['first_lba'], p['last_lba'], 0) for p in PARTS], DISK_LBAS, cls.tmp / 'lun0.img')
         disk([(p['name'], p['first_lba'], p['last_lba'], 0) for p in PARTS], DISK_LBAS, cls.tmp / 'bad.img', damage=True)
-        names = ['xbl_a', 'abl_a', 'boot_a', 'xbl_b', 'abl_b', 'boot_b', 'vendor_boot_b', 'dtbo_b', 'vbmeta_b']
-        disk([(n, 6 + i * 8, 6 + i * 8 + 7, 0) for i, n in enumerate(names)], 512, cls.tmp / 'boot.img')
+        # the boot LUN as /dev/block/by-name shows sde: 65 partitions, no xbl (that is on LUN 1/2)
+        names = ['abl_a', 'boot_a', 'abl_b', 'boot_b', 'vendor_boot_b', 'dtbo_b', 'vbmeta_b'] + [f'p{i}' for i in range(58)]
+        disk([(n, 6 + i * 4, 6 + i * 4 + 3, 0) for i, n in enumerate(names)], 512, cls.tmp / 'boot.img')
+        disk([(n, 6 + i * 4, 6 + i * 4 + 3, 0) for i, n in enumerate(names[:-1])], 512, cls.tmp / 'boot64.img')
 
     @classmethod
     def tearDownClass(cls):
@@ -64,6 +66,8 @@ class DumpScript(unittest.TestCase):
         self.assertIn('entries CRC32 does not match', out, out)
         rc, out = self.ps('-Check', '-Disk', '0', '-ImageFile', win(self.tmp / 'boot.img'))
         self.assertIn('kind=boot', out, out)
+        rc, out = self.ps('-Check', '-Disk', '0', '-ImageFile', win(self.tmp / 'boot64.img'))
+        self.assertIn('GPT of another disk (64 partitions', out, out)
 
     def test_only_the_proven_disk_is_copied(self):
         out_dir = self.tmp / 'out'
