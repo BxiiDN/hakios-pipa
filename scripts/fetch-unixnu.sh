@@ -25,6 +25,8 @@ pin UniXNU-pipa-reference "$PIPA_REFERENCE_REPOSITORY" "$PIPA_REFERENCE_REF"
 if [ "${HAKIOS_UNIXNU_PATCHES:-1}" = 1 ]; then
 	apply_patches "$WORK/UniXNU" "$ROOT/patches/unixnu"
 	apply_patches "$WORK/UniXNU-pipa" "$ROOT/patches/unixnu-pipa"
+	# patches/uefi-pipa: the firmware's own additions (the read-only GPT Tools plugin, docs/IPADOS-PARTITION.md)
+	[ "${SKIP_UEFI_PIPA:-0}" = 1 ] || apply_patches "$WORK/uefi-pipa" "$ROOT/patches/uefi-pipa"
 fi
 # the iPadOS 17 profile must still name the XNU this repository records
 profile=$WORK/UniXNU/profiles/os/ipados-17.7.11-21H461/profile.toml

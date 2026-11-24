@@ -1,4 +1,4 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–14)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–15)
 
 **Status: belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
@@ -32,9 +32,9 @@ Tanpa root, satu-satunya jalan membaca GPT adalah Linux kecil yang di-boot dari 
 | Tiap disk `sdX`: node blok mode `r--`, `O_RDONLY`, `BLKROSET` sebelum baca pertama; disk tanpa `BLKROGET=1` dilewati tanpa dibaca | `init.c copy_gpt`, `tests/test_gpt_reader_source.py` |
 | Yang dibaca: 6 sektor pertama (MBR pelindung, header primer, 4 sektor entri), 5 sektor terakhir (entri + header cadangan), ukuran dan ukuran sektor | idem |
 | Yang ditulis: hanya image FAT di RAM (`/log.img`), pmsg/kmsg (RAM), file configfs gadget USB; mount hanya devtmpfs/sysfs/proc/configfs/pstore | idem (sumber setelah preprocessor) |
-| Hasil disajikan sebagai disk USB read-only (`PIPALOG`), lalu tablet restart ke fastboot | `init.c start` |
+| Hasil disajikan sebagai disk USB read-only (`PIPALOG`); setelah di-eject (atau 60 s), pembaca **mematikan tablet begitu kabel USB dicabut** (maks. 600 s); tidak ada restart ke fastboot | `init.c start`, `test_gpt_reader_source.py` |
 
-Image: `~/hakios/gpt-reader.*/gpt-reader.img` (54 489 088 B, `a7fa37bb…`; kernel + DTB stock OS2.0.16, tidak di Git).
+Image sesi 13 `~/hakios/gpt-reader.*/gpt-reader.img` (`a7fa37bb…`, kernel 4.19 OS2.0.16) **tidak boleh dipakai** (bagian 8, `DO-NOT-USE.txt`). Image yang sah hanya dibangun dari boot/vendor_boot ROM terpasang dan harus lulus `tools/rom_match.py`; jalur lain: plugin UEFI (bagian 9).
 Analisis: `tools/gpt_capacity.py report LOG.BIN --out DIR` → per LUN: CRC primer/cadangan, salinan entri identik,
 ukuran disk = LBA cadangan, ruang kosong, dan apakah partisi `ipados` muat; `DIR/sda.bin` langsung untuk
 `tools/pipa_gpt.py check plans/ipados-*.json sda.bin`. Hasil dump juga **backup GPT** untuk pemulihan (bagian 6).
@@ -43,7 +43,8 @@ Langkah (butuh persetujuan pemilik karena tablet di-restart; tidak ada yang ditu
 1. Pemilik membawa tablet ke fastboot (`adb reboot bootloader`, atau Power + Vol−).
 2. `fastboot getvar current-slot`, `fastboot getvar max-download-size` (read-only).
 3. `fastboot boot gpt-reader.img` (RAM). Salin `LOG.BIN` dan `STATUS.TXT` dari drive `PIPALOG`, lalu eject.
-4. Tablet kembali ke fastboot → `fastboot reboot` → Android, data utuh.
+4. Cabut kabel USB → pembaca mematikan tablet → pemilik menyalakan dengan Power → Android, data utuh. **Tidak** memakai
+   `fastboot reboot` (pada ROM port ini tablet macet di logo setelahnya; pemulihan: tahan Power 15–20 s).
 
 Risiko yang diketahui: ABL menolak image (pernah terjadi dengan DTB yang salah, 17 Nov) dan menandai slot `_b`
 unbootable → pemulihan `fastboot set_active b` (perubahan atribut slot: persetujuan terpisah). Image ini memakai DTB
@@ -96,7 +97,7 @@ Xiaomi (`rawdump`, `cust`, `rescue`, `bk0x`), file di `userdata` (ciphertext), U
 | Apa | Cara tanpa root | Verifikasi |
 | --- | --- | --- |
 | Aplikasi + datanya | Backup & restore bawaan HyperOS (cadangan lokal) → `/sdcard/MIUI/backup/AllBackup/…`, lalu salin ke PC | pulihkan satu aplikasi uji dari cadangan itu sebelum langkah tulis |
-| Penyimpanan internal (foto, dokumen, unduhan) | `adb pull /sdcard/` ke PC (ruang kosong WSL 768 GB) | daftar file + SHA-256 di PC, dibandingkan ulang |
+| Penyimpanan internal (foto, dokumen, unduhan) | `adb pull /sdcard/` ke PC (cek ruang kosong PC dulu) | daftar file + SHA-256 di PC, dibandingkan ulang |
 | Akun & sinkronisasi | Google / Mi Cloud | login uji di perangkat lain |
 | Aplikasi dengan kunci sendiri (2FA, bank, chat) | ekspor/backup milik aplikasi itu (contoh: cadangan WhatsApp, kode pemulihan authenticator) | dicatat pemilik |
 | GPT semua LUN | dump pembaca (bagian 2): primer + cadangan per LUN | `gpt_capacity.py`: CRC dan salinan entri |
@@ -109,8 +110,8 @@ lagi: sekarang data Android harus aman, jadi backup di atas dijalankan pemilik (
 
 | Kejadian | Pemulihan | Data |
 | --- | --- | --- |
-| Pembaca GPT ditolak ABL | `fastboot set_active b` (dengan persetujuan), `fastboot reboot` | utuh |
-| GPT baru (A) salah / Android tidak boot | tulis kembali GPT dari dump pembaca (`partition:0`), `fastboot reboot` | utuh (A tidak menyentuh isi partisi) |
+| Pembaca GPT ditolak ABL | `fastboot set_active b` (dengan persetujuan), lalu tahan Power 15–20 s / nyalakan biasa (bukan `fastboot reboot`) | utuh |
+| GPT baru (A) salah / Android tidak boot | tulis kembali GPT dari dump pembaca (`partition:0`), lalu nyalakan ulang dengan Power | utuh (A tidak menyentuh isi partisi) |
 | B: Android tidak boot setelah format | `flash_all` ROM fastboot OS4.0.8.0 (menghapus data) lalu pulihkan backup | dari backup |
 | Boot partition (MODE B) rusak | `fastboot flash boot_b` image stock OS4.0.8.0 dari ROM yang sama | utuh |
 | Fastboot sendiri | ABL di partisinya sendiri, tidak pernah ditulis repo ini (`pipa_gpt.py` menolak semua partisi firmware) | — |
@@ -180,3 +181,37 @@ build firmware + persetujuan RAM-boot.
 | B5 (menu di `boot_b`) | ya: shim masuk ke kernel 5.10 port; pemilih `bootargs` cocok dengan ABL OS2.0.16 (tanpa bootconfig) | layak, tapi butuh `boot.img` port asli dan diulang tiap update ROM port |
 | Partisi `ipados` | tidak (GPT) | masalah ruang tetap sama |
 | Pemulihan | ya: tanpa paket ROM port tidak ada image `boot_b` untuk dipulihkan | **blocker** |
+
+## 9. Sesi 15: pencarian image ROM port dan plugin UEFI "GPT (read only)"
+
+### Pencarian image ROM terpasang (read-only)
+
+Dicari di `C:\Users\<user>` (Downloads, Desktop, Documents, `pipa-flash`), drive D:/E:/F: dan home WSL: arsip
+(zip/7z/rar/tgz/tar), `payload.bin`, `super*.img`, nama berisi pipa/HyperOS/OS4/XPZ/Pad 8, dan semua `*.img` 8–256 MiB
+diperiksa magic `ANDROID!` serta banner kernelnya. Hasil:
+
+| Temuan | Isi | Cocok dengan ROM terpasang? |
+| --- | --- | --- |
+| `Downloads\boot.img`, `vendor_boot.img`, `dtbo.img` (19 Nov 06:58, ukuran = partisi: dump) | boot v3, kernel **4.19.325-perf+**; vendor_boot 3 DTB (`msm-id 0x164`); dtbo 13 entri | **Tidak**: `rom_match.py` FAIL (banner, `uname -v`, config tertanam). Kemungkinan dump ROM custom sebelumnya |
+| Paket ROM port Pad 8 (kernel 5.10.241) | — | **tidak ditemukan** |
+
+Salinan privat (tidak di Git): `~/.hakios-private/port-rom-downloads.*` (SHA-256 sama dengan aslinya: `56a71abe…`,
+`6dabbe97…`, `fbbe0fab…`). File itu **bukan** salinan pemulihan untuk ROM sekarang; jangan di-flash.
+
+### Plugin UEFI (patch `unixnu/0007`, `uefi-pipa/0001`)
+
+Karena image ROM port tidak ada, pembacaan GPT dipindah ke firmware MODE A sendiri: entri Tools → **"GPT (read only)"**.
+
+| Sifat | Bukti |
+| --- | --- |
+| Hanya `EFI_BLOCK_IO_PROTOCOL.ReadBlocks`: header primer (LBA 1), array entri, header cadangan (LBA terakhir), pada disk utuh (`LogicalPartition = FALSE`) | `GptViewDxe.c`; `test_gpt_view.py` menolak `WriteBlocks`, `FlushBlocks`, `DiskIo`, `SimpleFileSystem`, `EraseBlocks`, `SetVariable`, `ResetSystem`; INF hanya BlockIo + protokol plugin; biner: GUID BlockIo ada, BlockIo2/DiskIo/SimpleFileSystem tidak |
+| Logika (`GptScan.c`): CRC header dan entri, geometri, salinan cadangan, tumpang tindih, ruang kosong, partisi terakhir, `userdata`/`ipados` | 10 tes host: file dari patch dikompilasi `-DGPT_SCAN_HOST`, hasil = `pipa_gpt.py` (partisi, jumlah/terbesar ruang kosong) |
+| LUN 0 = disk yang memuat `userdata` (seperti `sda34` di Android); ditampilkan lengkap, disk lain satu baris; baris juga ke log (`GPTVIEW:`) | `GptViewDxe.c` |
+| Kesimpulan di layar: `DESIGN A FITS` / `no room without resizing userdata` / `UNKNOWN (table not sound)` terhadap 19 126 026 240 B | sama dengan `gpt_capacity.py need` (dites) |
+| Build lokal | firmware PASS; `GptViewDxe.efi` 27 648 B di FVMAIN; FV terkompresi 0x195a40/0x300000; FD `bf7e98f0…` (FD sebelumnya `bd39c37a…` disimpan di `~/hakios/fd-baseline.*`) |
+| Image MODE A uji (payload v5, FD baru) | `~/hakios/payload-v6-gptview.*/…/boot.img` `a8d40a90…` 120 248 320 B: IMAGE CONSISTENT, ABL LAYOUT PASS, menu: default Android, entri Tools ada. **Belum dijalankan di tablet** |
+
+Rencana uji (butuh persetujuan terpisah; tidak menulis UFS): `fastboot boot` image itu → menu → Tools → GPT (read
+only) → foto layar → kembali → **Power off** dari menu (bukan Restart/`fastboot reboot`) → nyalakan dengan Power →
+Android. Risiko yang tersisa: `pipa.dtb` khusus papan (`board-id 0x34`) diharapkan "Exact DTB match" sehingga `dtbo_b`
+port dilewati — belum dibuktikan pada ROM port ini; bila ABL menolak, pemulihannya seperti bagian 6.

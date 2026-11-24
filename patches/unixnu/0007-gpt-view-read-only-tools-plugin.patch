@@ -1,0 +1,925 @@
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptScan.h b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.h
+new file mode 100644
+index 0000000..36ce98d
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.h
+@@ -0,0 +1,95 @@
++/** @file
++  Read-only GPT survey of one disk, from buffers the caller has already read: the primary header (LBA 1), its partition
++  entry array and the backup header (the disk's last LBA). Pure C with no firmware calls, so the same file is built into
++  GptViewDxe and into the host tests of hakios-pipa (tests/test_gpt_view.py). Nothing here writes anywhere but the
++  caller's summary structure.
++
++  Copyright (c) 2026, hakios-pipa contributors.
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef GPT_SCAN_H_
++#define GPT_SCAN_H_
++
++#ifdef GPT_SCAN_HOST
++#include <stdint.h>
++typedef uint8_t   GS_U8;
++typedef uint16_t  GS_U16;
++typedef uint32_t  GS_U32;
++typedef uint64_t  GS_U64;
++#else
++#include <Uefi.h>
++typedef UINT8   GS_U8;
++typedef UINT16  GS_U16;
++typedef UINT32  GS_U32;
++typedef UINT64  GS_U64;
++#endif
++
++#define GPT_SCAN_MAX_ENTRIES  256
++#define GPT_SCAN_NAME_CHARS   36
++
++// Results, one bit each; GPT_SCAN_OK when the primary table is usable.
++#define GPT_SCAN_OK                  0u
++#define GPT_SCAN_NO_SIGNATURE        (1u << 0)   // LBA 1 is not "EFI PART": no GPT on this disk
++#define GPT_SCAN_BAD_HEADER          (1u << 1)   // header size, CRC32 or geometry out of range
++#define GPT_SCAN_BAD_ENTRIES         (1u << 2)   // entry array CRC32 does not match
++#define GPT_SCAN_BAD_BACKUP          (1u << 3)   // backup header missing, CRC wrong, or not the mirror of the primary
++#define GPT_SCAN_BACKUP_NOT_AT_END   (1u << 4)   // primary names a backup LBA other than the disk's last LBA
++#define GPT_SCAN_OVERLAP             (1u << 5)   // two partitions overlap, or one lies outside the usable area
++
++typedef GS_U32 (*GPT_SCAN_CRC32)(const void *Data, GS_U64 Length);
++
++typedef struct {
++  GS_U32  Flags;
++  GS_U32  BlockSize;
++  GS_U64  DiskBlocks;                  // last LBA + 1
++  GS_U64  FirstUsable;
++  GS_U64  LastUsable;
++  GS_U64  BackupLba;
++  GS_U64  EntriesLba;
++  GS_U32  EntryCount;
++  GS_U32  EntrySize;
++  GS_U32  EntriesCrcExpected;          // primary header field at offset 88
++  GS_U32  Partitions;                  // non-empty entries
++  int     HasUserdata;                 // a partition named "userdata": Android's LUN 0 on pipa
++  int     HasIpados;                   // a partition named "ipados"
++  GS_U64  LastPartitionEnd;            // highest last LBA of any partition
++  char    LastPartitionName[GPT_SCAN_NAME_CHARS + 1];
++  GS_U64  FreeBlocks;                  // usable blocks no partition holds
++  GS_U64  LargestFreeFirst;            // the largest such range
++  GS_U64  LargestFreeBlocks;
++  GS_U32  FreeRanges;
++} GPT_SCAN_SUMMARY;
++
++// Primary header from Block (one BlockSize block at LBA 1). Fills the geometry fields of Summary; returns its Flags.
++GS_U32
++GptScanHeader (
++  const GS_U8       *Block,
++  GS_U32            BlockSize,
++  GS_U64            DiskBlocks,
++  GPT_SCAN_CRC32    Crc32,
++  GPT_SCAN_SUMMARY  *Summary
++  );
++
++// The entry array (EntryCount * EntrySize bytes read from EntriesLba) and, if not NULL, the backup header block.
++GS_U32
++GptScanEntries (
++  const GS_U8       *Entries,
++  GS_U64            EntriesBytes,
++  const GS_U8       *BackupBlock,
++  GPT_SCAN_CRC32    Crc32,
++  GPT_SCAN_SUMMARY  *Summary
++  );
++
++// One line of text (NUL-terminated ASCII, at most Cap - 1 characters) for line Index of the summary; returns 0 past the
++// last line. Sizes are in MiB, rounded down.
++int
++GptScanLine (
++  const GPT_SCAN_SUMMARY  *Summary,
++  GS_U64                  NeedBytes,
++  unsigned                Index,
++  char                    *Out,
++  unsigned                Cap
++  );
++
++#endif
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptScan.c b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.c
+new file mode 100644
+index 0000000..5fae416
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptScan.c
+@@ -0,0 +1,317 @@
++/** @file
++  Read-only GPT survey (GptScan.h). Byte-order explicit (little endian, as GPT is); no library calls.
++
++  Copyright (c) 2026, hakios-pipa contributors.
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "GptScan.h"
++
++static GS_U32 Le32 (const GS_U8 *P) { return (GS_U32)P[0] | (GS_U32)P[1] << 8 | (GS_U32)P[2] << 16 | (GS_U32)P[3] << 24; }
++static GS_U64 Le64 (const GS_U8 *P) { return (GS_U64)Le32 (P) | (GS_U64)Le32 (P + 4) << 32; }
++
++static int
++SameBytes (const GS_U8 *A, const char *B, unsigned N)
++{
++  unsigned  I;
++
++  for (I = 0; I < N; I++) {
++    if (A[I] != (GS_U8)B[I]) {
++      return 0;
++    }
++  }
++  return 1;
++}
++
++// Header CRC32 over HeaderSize bytes with the CRC field taken as zero.
++static GS_U32
++HeaderCrc (const GS_U8 *Block, GS_U32 HeaderSize, GPT_SCAN_CRC32 Crc32)
++{
++  GS_U8   Copy[512];
++  GS_U32  I;
++
++  for (I = 0; I < HeaderSize; I++) {
++    Copy[I] = (I >= 16 && I < 20) ? 0 : Block[I];
++  }
++  return Crc32 (Copy, HeaderSize);
++}
++
++GS_U32
++GptScanHeader (
++  const GS_U8       *Block,
++  GS_U32            BlockSize,
++  GS_U64            DiskBlocks,
++  GPT_SCAN_CRC32    Crc32,
++  GPT_SCAN_SUMMARY  *Summary
++  )
++{
++  GS_U32  HeaderSize;
++  GS_U64  EntryBlocks;
++  GS_U8   *Clear;
++  GS_U32  I;
++
++  Clear = (GS_U8 *)Summary;
++  for (I = 0; I < sizeof (*Summary); I++) {
++    Clear[I] = 0;
++  }
++  Summary->BlockSize  = BlockSize;
++  Summary->DiskBlocks = DiskBlocks;
++  if ((BlockSize < 512) || !SameBytes (Block, "EFI PART", 8)) {
++    Summary->Flags = GPT_SCAN_NO_SIGNATURE;
++    return Summary->Flags;
++  }
++  HeaderSize = Le32 (Block + 12);
++  if ((HeaderSize < 92) || (HeaderSize > 512) || (HeaderSize > BlockSize) ||
++      (HeaderCrc (Block, HeaderSize, Crc32) != Le32 (Block + 16)))
++  {
++    Summary->Flags = GPT_SCAN_BAD_HEADER;
++    return Summary->Flags;
++  }
++  Summary->BackupLba   = Le64 (Block + 32);
++  Summary->FirstUsable = Le64 (Block + 40);
++  Summary->LastUsable  = Le64 (Block + 48);
++  Summary->EntriesLba  = Le64 (Block + 72);
++  Summary->EntryCount  = Le32 (Block + 80);
++  Summary->EntrySize   = Le32 (Block + 84);
++  Summary->EntriesCrcExpected = Le32 (Block + 88);
++  EntryBlocks          = ((GS_U64)Summary->EntryCount * Summary->EntrySize + BlockSize - 1) / BlockSize;
++  if ((Le64 (Block + 24) != 1) || (Summary->EntrySize < 128) || (Summary->EntrySize > 1024) ||
++      (Summary->EntryCount == 0) || (Summary->EntryCount > GPT_SCAN_MAX_ENTRIES) || (Summary->EntriesLba < 2) ||
++      (Summary->EntriesLba + EntryBlocks > Summary->FirstUsable) || (Summary->FirstUsable > Summary->LastUsable) ||
++      (Summary->LastUsable >= DiskBlocks))
++  {
++    Summary->Flags = GPT_SCAN_BAD_HEADER;
++    return Summary->Flags;
++  }
++  if (Summary->BackupLba != DiskBlocks - 1) {
++    Summary->Flags |= GPT_SCAN_BACKUP_NOT_AT_END;
++  }
++  return Summary->Flags;
++}
++
++GS_U32
++GptScanEntries (
++  const GS_U8       *Entries,
++  GS_U64            EntriesBytes,
++  const GS_U8       *BackupBlock,
++  GPT_SCAN_CRC32    Crc32,
++  GPT_SCAN_SUMMARY  *Summary
++  )
++{
++  static GS_U64  First[GPT_SCAN_MAX_ENTRIES];
++  static GS_U64  Last[GPT_SCAN_MAX_ENTRIES];
++  GS_U64         Bytes;
++  GS_U32         Count;
++  GS_U32         I;
++  GS_U32         J;
++  GS_U64         Cursor;
++
++  Bytes = (GS_U64)Summary->EntryCount * Summary->EntrySize;
++  if (EntriesBytes < Bytes) {
++    Summary->Flags |= GPT_SCAN_BAD_ENTRIES;
++    return Summary->Flags;
++  }
++  // primary header field 88: CRC32 of the entry array. A mismatch is reported (the verdict line then says UNKNOWN), but the
++  // entries are still read so the disk can be named.
++  if (Crc32 (Entries, Bytes) != Summary->EntriesCrcExpected) {
++    Summary->Flags |= GPT_SCAN_BAD_ENTRIES;
++  }
++  Count = 0;
++  for (I = 0; I < Summary->EntryCount; I++) {
++    const GS_U8  *E = Entries + (GS_U64)I * Summary->EntrySize;
++    int          Empty = 1;
++    char         Name[GPT_SCAN_NAME_CHARS + 1];
++
++    for (J = 0; J < 16; J++) {
++      if (E[J] != 0) {
++        Empty = 0;
++      }
++    }
++    if (Empty) {
++      continue;
++    }
++    for (J = 0; J < GPT_SCAN_NAME_CHARS; J++) {
++      GS_U16  C = (GS_U16)(E[56 + 2 * J] | E[57 + 2 * J] << 8);
++
++      Name[J] = (C >= 0x20 && C < 0x7f) ? (char)C : (C == 0 ? 0 : '?');
++      if (C == 0) {
++        break;
++      }
++    }
++    Name[J < GPT_SCAN_NAME_CHARS ? J : GPT_SCAN_NAME_CHARS] = 0;
++    First[Count] = Le64 (E + 32);
++    Last[Count]  = Le64 (E + 40);
++    if ((First[Count] > Last[Count]) || (First[Count] < Summary->FirstUsable) || (Last[Count] > Summary->LastUsable)) {
++      Summary->Flags |= GPT_SCAN_OVERLAP;
++    }
++    if (SameBytes ((const GS_U8 *)Name, "userdata", 9)) {
++      Summary->HasUserdata = 1;
++    }
++    if (SameBytes ((const GS_U8 *)Name, "ipados", 7)) {
++      Summary->HasIpados = 1;
++    }
++    if (Last[Count] >= Summary->LastPartitionEnd) {
++      Summary->LastPartitionEnd = Last[Count];
++      for (J = 0; J <= GPT_SCAN_NAME_CHARS; J++) {
++        Summary->LastPartitionName[J] = Name[J];
++        if (Name[J] == 0) {
++          break;
++        }
++      }
++    }
++    Count++;
++  }
++  Summary->Partitions = Count;
++  // insertion sort by first LBA, then the gaps between them inside first..last usable
++  for (I = 1; I < Count; I++) {
++    GS_U64  F = First[I], L = Last[I];
++
++    for (J = I; J > 0 && First[J - 1] > F; J--) {
++      First[J] = First[J - 1];
++      Last[J]  = Last[J - 1];
++    }
++    First[J] = F;
++    Last[J]  = L;
++  }
++  Cursor = Summary->FirstUsable;
++  for (I = 0; I <= Count; I++) {
++    GS_U64  Start = (I < Count) ? First[I] : Summary->LastUsable + 1;
++
++    if ((I > 0) && (I < Count) && (First[I] <= Last[I - 1])) {
++      Summary->Flags |= GPT_SCAN_OVERLAP;
++    }
++    if (Start > Cursor) {
++      GS_U64  Gap = Start - Cursor;
++
++      Summary->FreeBlocks += Gap;
++      Summary->FreeRanges++;
++      if (Gap > Summary->LargestFreeBlocks) {
++        Summary->LargestFreeBlocks = Gap;
++        Summary->LargestFreeFirst  = Cursor;
++      }
++    }
++    if ((I < Count) && (Last[I] + 1 > Cursor)) {
++      Cursor = Last[I] + 1;
++    }
++  }
++  if (BackupBlock != (const GS_U8 *)0) {
++    GS_U32  Size = Le32 (BackupBlock + 12);
++
++    if (!SameBytes (BackupBlock, "EFI PART", 8) || (Size < 92) || (Size > 512) || (Size > Summary->BlockSize) ||
++        (HeaderCrc (BackupBlock, Size, Crc32) != Le32 (BackupBlock + 16)) ||
++        (Le64 (BackupBlock + 24) != Summary->DiskBlocks - 1) || (Le64 (BackupBlock + 32) != 1) ||
++        (Le32 (BackupBlock + 88) != Summary->EntriesCrcExpected) || (Le64 (BackupBlock + 40) != Summary->FirstUsable) ||
++        (Le64 (BackupBlock + 48) != Summary->LastUsable))
++    {
++      Summary->Flags |= GPT_SCAN_BAD_BACKUP;
++    }
++  } else {
++    Summary->Flags |= GPT_SCAN_BAD_BACKUP;
++  }
++  return Summary->Flags;
++}
++
++static unsigned
++PutStr (char *Out, unsigned At, unsigned Cap, const char *S)
++{
++  while (*S && At + 1 < Cap) {
++    Out[At++] = *S++;
++  }
++  Out[At < Cap ? At : Cap - 1] = 0;
++  return At;
++}
++
++static unsigned
++PutNum (char *Out, unsigned At, unsigned Cap, GS_U64 V)
++{
++  char  Buf[24];
++  int   I = 23;
++
++  Buf[I] = 0;
++  do {
++    Buf[--I] = (char)('0' + V % 10);
++    V       /= 10;
++  } while (V && I > 0);
++  return PutStr (Out, At, Cap, Buf + I);
++}
++
++static GS_U64 Mib (const GPT_SCAN_SUMMARY *S, GS_U64 Blocks) { return Blocks * S->BlockSize / (1024 * 1024); }
++
++int
++GptScanLine (
++  const GPT_SCAN_SUMMARY  *S,
++  GS_U64                  NeedBytes,
++  unsigned                Index,
++  char                    *Out,
++  unsigned                Cap
++  )
++{
++  unsigned  At = 0;
++
++  if (Cap == 0) {
++    return 0;
++  }
++  Out[0] = 0;
++  if (S->Flags & (GPT_SCAN_NO_SIGNATURE | GPT_SCAN_BAD_HEADER)) {
++    if (Index > 0) {
++      return 0;
++    }
++    At = PutStr (Out, At, Cap, (S->Flags & GPT_SCAN_NO_SIGNATURE) ? "no GPT, " : "GPT header INVALID, ");
++    At = PutNum (Out, At, Cap, Mib (S, S->DiskBlocks));
++    PutStr (Out, At, Cap, " MiB");
++    return 1;
++  }
++  switch (Index) {
++    case 0:
++      At = PutStr (Out, At, Cap, S->HasUserdata ? "LUN 0 (userdata): " : "disk: ");
++      At = PutNum (Out, At, Cap, Mib (S, S->DiskBlocks));
++      At = PutStr (Out, At, Cap, " MiB, block ");
++      At = PutNum (Out, At, Cap, S->BlockSize);
++      At = PutStr (Out, At, Cap, ", ");
++      At = PutNum (Out, At, Cap, S->Partitions);
++      PutStr (Out, At, Cap, " partitions");
++      return 1;
++    case 1:
++      At = PutStr (Out, At, Cap, "usable LBA ");
++      At = PutNum (Out, At, Cap, S->FirstUsable);
++      At = PutStr (Out, At, Cap, "..");
++      At = PutNum (Out, At, Cap, S->LastUsable);
++      At = PutStr (Out, At, Cap, ", last partition ");
++      At = PutStr (Out, At, Cap, S->LastPartitionName);
++      At = PutStr (Out, At, Cap, " ends ");
++      PutNum (Out, At, Cap, S->LastPartitionEnd);
++      return 1;
++    case 2:
++      At = PutStr (Out, At, Cap, "free ");
++      At = PutNum (Out, At, Cap, Mib (S, S->FreeBlocks));
++      At = PutStr (Out, At, Cap, " MiB in ");
++      At = PutNum (Out, At, Cap, S->FreeRanges);
++      At = PutStr (Out, At, Cap, " range(s), largest ");
++      At = PutNum (Out, At, Cap, Mib (S, S->LargestFreeBlocks));
++      At = PutStr (Out, At, Cap, " MiB at LBA ");
++      PutNum (Out, At, Cap, S->LargestFreeFirst);
++      return 1;
++    case 3:
++      At = PutStr (Out, At, Cap, "checks: entries ");
++      At = PutStr (Out, At, Cap, (S->Flags & GPT_SCAN_BAD_ENTRIES) ? "BAD" : "ok");
++      At = PutStr (Out, At, Cap, ", backup ");
++      At = PutStr (Out, At, Cap, (S->Flags & GPT_SCAN_BAD_BACKUP) ? "BAD" : "ok");
++      At = PutStr (Out, At, Cap, (S->Flags & GPT_SCAN_BACKUP_NOT_AT_END) ? ", backup LBA not at end" : "");
++      PutStr (Out, At, Cap, (S->Flags & GPT_SCAN_OVERLAP) ? ", OVERLAP" : ", no overlap");
++      return 1;
++    case 4:
++      if (!S->HasUserdata) {
++        return 0;
++      }
++      At = PutStr (Out, At, Cap, S->HasIpados ? "ipados: present" : "ipados: absent");
++      At = PutStr (Out, At, Cap, "; need ");
++      At = PutNum (Out, At, Cap, NeedBytes / (1024 * 1024));
++      At = PutStr (Out, At, Cap, " MiB -> ");
++      PutStr (Out, At, Cap, (S->Flags & (GPT_SCAN_BAD_ENTRIES | GPT_SCAN_OVERLAP)) ? "UNKNOWN (table not sound)" :
++                            (S->LargestFreeBlocks * S->BlockSize >= NeedBytes) ? "DESIGN A FITS" :
++                            "no room without resizing userdata");
++      return 1;
++    default:
++      return 0;
++  }
++}
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptFont.h b/package/UniXNUPkg/Driver/GptViewDxe/GptFont.h
+new file mode 100644
+index 0000000..fb115d8
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptFont.h
+@@ -0,0 +1,11 @@
++/** @file
++  The UniXNU menu font (UniXNULib Font.c), copied for GptViewDxe.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++#ifndef GPT_FONT_H_
++#define GPT_FONT_H_
++#define GPT_VIEW_GLYPH_WIDTH   8
++#define GPT_VIEW_GLYPH_HEIGHT  19
++extern CONST UINT8  gGptViewGlyphs[95][GPT_VIEW_GLYPH_HEIGHT];
++#endif
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptFont.c b/package/UniXNUPkg/Driver/GptViewDxe/GptFont.c
+new file mode 100644
+index 0000000..857d781
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptFont.c
+@@ -0,0 +1,111 @@
++/** @file
++  8x19 bitmap font for printable ASCII (0x20..0x7E): a copy of UniXNULib Font.c for GptViewDxe.
++
++  Glyph data taken from the EDK II GraphicsConsoleDxe narrow font
++  (MdeModulePkg/Universal/Console/GraphicsConsoleDxe/LaffStd.c,
++  Copyright (c) 2006 - 2008, Intel Corporation. All rights reserved.),
++  BSD-2-Clause-Patent. Generated; do not edit by hand.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Uefi.h>
++#include "GptFont.h"
++
++CONST UINT8  gGptViewGlyphs[95][GPT_VIEW_GLYPH_HEIGHT] = {
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // ' '
++  { 0x00, 0x00, 0x00, 0x18, 0x3C, 0x3C, 0x3C, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00 },  // '!'
++  { 0x00, 0x00, 0x00, 0x6C, 0x6C, 0x6C, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '"'
++  { 0x00, 0x00, 0x00, 0x00, 0x6C, 0x6C, 0x6C, 0xFE, 0x6C, 0x6C, 0x6C, 0xFE, 0x6C, 0x6C, 0x6C, 0x00, 0x00, 0x00, 0x00 },  // '#'
++  { 0x00, 0x00, 0x18, 0x18, 0x7C, 0xC6, 0xC6, 0x60, 0x38, 0x0C, 0x06, 0xC6, 0xC6, 0x7C, 0x18, 0x18, 0x00, 0x00, 0x00 },  // '$'
++  { 0x00, 0x00, 0x00, 0xC6, 0xC6, 0x0C, 0x0C, 0x18, 0x18, 0x30, 0x30, 0x60, 0x60, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // '%'
++  { 0x00, 0x00, 0x00, 0x78, 0xCC, 0xCC, 0xCC, 0x78, 0x76, 0xDC, 0xCC, 0xCC, 0xCC, 0xCC, 0x76, 0x00, 0x00, 0x00, 0x00 },  // '&'
++  { 0x00, 0x00, 0x18, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // "'"
++  { 0x00, 0x00, 0x00, 0x06, 0x0C, 0x0C, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0C, 0x0C, 0x06, 0x00, 0x00, 0x00, 0x00 },  // '('
++  { 0x00, 0x00, 0x00, 0xC0, 0x60, 0x60, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x60, 0x60, 0xC0, 0x00, 0x00, 0x00, 0x00 },  // ')'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6C, 0x38, 0xFE, 0x38, 0x6C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '*'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x7E, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '+'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00 },  // ','
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '-'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '.'
++  { 0x00, 0x00, 0x00, 0x06, 0x06, 0x0C, 0x0C, 0x18, 0x18, 0x30, 0x30, 0x60, 0x60, 0xC0, 0xC0, 0x00, 0x00, 0x00, 0x00 },  // '/'
++  { 0x00, 0x00, 0x00, 0x38, 0x6C, 0xC6, 0xC6, 0xC6, 0xD6, 0xD6, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x00, 0x00, 0x00, 0x00 },  // '0'
++  { 0x00, 0x00, 0x00, 0x18, 0x38, 0x78, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00, 0x00, 0x00, 0x00 },  // '1'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0xC2, 0xFE, 0x00, 0x00, 0x00, 0x00 },  // '2'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0x06, 0x06, 0x06, 0x3C, 0x06, 0x06, 0x06, 0x06, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // '3'
++  { 0x00, 0x00, 0x00, 0x1C, 0x1C, 0x3C, 0x3C, 0x6C, 0x6C, 0xCC, 0xFE, 0x0C, 0x0C, 0x0C, 0x1E, 0x00, 0x00, 0x00, 0x00 },  // '4'
++  { 0x00, 0x00, 0x00, 0xFE, 0xC0, 0xC0, 0xC0, 0xC0, 0xFC, 0x06, 0x06, 0x06, 0x06, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // '5'
++  { 0x00, 0x00, 0x00, 0x3C, 0x60, 0xC0, 0xC0, 0xC0, 0xFC, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // '6'
++  { 0x00, 0x00, 0x00, 0xFE, 0xC6, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00 },  // '7'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // '8'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0x7E, 0x06, 0x06, 0x06, 0x06, 0x0C, 0x78, 0x00, 0x00, 0x00, 0x00 },  // '9'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00 },  // ':'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00 },  // ';'
++  { 0x00, 0x00, 0x00, 0x00, 0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x00, 0x00, 0x00, 0x00 },  // '<'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0x00, 0x00, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '='
++  { 0x00, 0x00, 0x00, 0x00, 0xC0, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0x00, 0x00, 0x00, 0x00 },  // '>'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0x0C, 0x0C, 0x18, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00 },  // '?'
++  { 0x00, 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0xDE, 0xDE, 0xDE, 0xDC, 0xC0, 0xC0, 0x7E, 0x00, 0x00, 0x00, 0x00 },  // '@'
++  { 0x00, 0x00, 0x00, 0x10, 0x38, 0x6C, 0xC6, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // 'A'
++  { 0x00, 0x00, 0x00, 0xFC, 0x66, 0x66, 0x66, 0x66, 0x7C, 0x66, 0x66, 0x66, 0x66, 0x66, 0xFC, 0x00, 0x00, 0x00, 0x00 },  // 'B'
++  { 0x00, 0x00, 0x00, 0x3C, 0x66, 0xC2, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC2, 0x66, 0x3C, 0x00, 0x00, 0x00, 0x00 },  // 'C'
++  { 0x00, 0x00, 0x00, 0xF8, 0x6C, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x6C, 0xF8, 0x00, 0x00, 0x00, 0x00 },  // 'D'
++  { 0x00, 0x00, 0x00, 0xFE, 0x66, 0x62, 0x60, 0x68, 0x78, 0x68, 0x60, 0x60, 0x62, 0x66, 0xFE, 0x00, 0x00, 0x00, 0x00 },  // 'E'
++  { 0x00, 0x00, 0x00, 0xFE, 0x66, 0x62, 0x60, 0x64, 0x7C, 0x64, 0x60, 0x60, 0x60, 0x60, 0xF0, 0x00, 0x00, 0x00, 0x00 },  // 'F'
++  { 0x00, 0x00, 0x00, 0x3C, 0x66, 0xC2, 0xC0, 0xC0, 0xC0, 0xDE, 0xC6, 0xC6, 0xC6, 0x66, 0x3C, 0x00, 0x00, 0x00, 0x00 },  // 'G'
++  { 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // 'H'
++  { 0x00, 0x00, 0x00, 0xFC, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0xFC, 0x00, 0x00, 0x00, 0x00 },  // 'I'
++  { 0x00, 0x00, 0x00, 0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0xCC, 0xCC, 0x78, 0x00, 0x00, 0x00, 0x00 },  // 'J'
++  { 0x00, 0x00, 0x00, 0xE6, 0x66, 0x6C, 0x6C, 0x78, 0x70, 0x78, 0x6C, 0x6C, 0x66, 0x66, 0xE6, 0x00, 0x00, 0x00, 0x00 },  // 'K'
++  { 0x00, 0x00, 0x00, 0xF0, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x62, 0x66, 0xFE, 0x00, 0x00, 0x00, 0x00 },  // 'L'
++  { 0x00, 0x00, 0x00, 0xC6, 0xEE, 0xEE, 0xFE, 0xFE, 0xD6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // 'M'
++  { 0x00, 0x00, 0x00, 0xC6, 0xE6, 0xF6, 0xF6, 0xF6, 0xDE, 0xCE, 0xCE, 0xC6, 0xC6, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // 'N'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'O'
++  { 0x00, 0x00, 0x00, 0xFC, 0x66, 0x66, 0x66, 0x66, 0x66, 0x7C, 0x60, 0x60, 0x60, 0x60, 0xF0, 0x00, 0x00, 0x00, 0x00 },  // 'P'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xD6, 0xD6, 0x7C, 0x1C, 0x0E, 0x00, 0x00 },  // 'Q'
++  { 0x00, 0x00, 0x00, 0xFC, 0x66, 0x66, 0x66, 0x66, 0x7C, 0x78, 0x6C, 0x6C, 0x66, 0x66, 0xE6, 0x00, 0x00, 0x00, 0x00 },  // 'R'
++  { 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0x60, 0x38, 0x0C, 0x06, 0x06, 0xC6, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'S'
++  { 0x00, 0x00, 0x00, 0xFC, 0xFC, 0xB4, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x78, 0x00, 0x00, 0x00, 0x00 },  // 'T'
++  { 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'U'
++  { 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x10, 0x00, 0x00, 0x00, 0x00 },  // 'V'
++  { 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xD6, 0xD6, 0xD6, 0xFE, 0x6C, 0x6C, 0x00, 0x00, 0x00, 0x00 },  // 'W'
++  { 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0x6C, 0x6C, 0x38, 0x6C, 0x6C, 0xC6, 0xC6, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // 'X'
++  { 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x78, 0x30, 0x30, 0x30, 0x30, 0x30, 0x78, 0x00, 0x00, 0x00, 0x00 },  // 'Y'
++  { 0x00, 0x00, 0x00, 0xFE, 0xC6, 0x86, 0x0C, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0xC2, 0xC6, 0xFE, 0x00, 0x00, 0x00, 0x00 },  // 'Z'
++  { 0x00, 0x00, 0x00, 0x1E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1E, 0x00, 0x00, 0x00, 0x00 },  // '['
++  { 0x00, 0x00, 0x00, 0xC0, 0xC0, 0x60, 0x60, 0x30, 0x30, 0x18, 0x18, 0x0C, 0x0C, 0x06, 0x06, 0x00, 0x00, 0x00, 0x00 },  // '\\'
++  { 0x00, 0x00, 0x00, 0xF0, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0xF0, 0x00, 0x00, 0x00, 0x00 },  // ']'
++  { 0x00, 0x00, 0x10, 0x38, 0x6C, 0xC6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '^'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0x00, 0x00, 0x00, 0x00 },  // '_'
++  { 0x00, 0x30, 0x30, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '`'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x0C, 0x0C, 0x7C, 0xCC, 0xCC, 0xCC, 0x76, 0x00, 0x00, 0x00, 0x00 },  // 'a'
++  { 0x00, 0x00, 0x00, 0xE0, 0x60, 0x60, 0x60, 0x7C, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'b'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC0, 0xC0, 0xC0, 0xC0, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'c'
++  { 0x00, 0x00, 0x00, 0x1C, 0x0C, 0x0C, 0x0C, 0x3C, 0x6C, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x7E, 0x00, 0x00, 0x00, 0x00 },  // 'd'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xFE, 0xC0, 0xC0, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'e'
++  { 0x00, 0x00, 0x00, 0x1E, 0x33, 0x30, 0x30, 0x30, 0x78, 0x30, 0x30, 0x30, 0x30, 0x30, 0x78, 0x00, 0x00, 0x00, 0x00 },  // 'f'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x7C, 0x0C, 0xCC, 0x78, 0x00 },  // 'g'
++  { 0x00, 0x00, 0x00, 0xE0, 0x60, 0x60, 0x60, 0x7C, 0x76, 0x66, 0x66, 0x66, 0x66, 0x66, 0xE6, 0x00, 0x00, 0x00, 0x00 },  // 'h'
++  { 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3C, 0x00, 0x00, 0x00, 0x00 },  // 'i'
++  { 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x0C, 0x00, 0x1C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x6C, 0x38, 0x00 },  // 'j'
++  { 0x00, 0x00, 0x00, 0xE0, 0x60, 0x60, 0x66, 0x6C, 0x78, 0x70, 0x78, 0x6C, 0x6C, 0x66, 0xE6, 0x00, 0x00, 0x00, 0x00 },  // 'k'
++  { 0x00, 0x00, 0x00, 0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3C, 0x00, 0x00, 0x00, 0x00 },  // 'l'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xEC, 0xEE, 0xFE, 0xD6, 0xD6, 0xD6, 0xD6, 0xD6, 0x00, 0x00, 0x00, 0x00 },  // 'm'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xDC, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x00, 0x00, 0x00 },  // 'n'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 'o'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xDC, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x7C, 0x60, 0x60, 0xF0, 0x00 },  // 'p'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x76, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x7C, 0x0C, 0x0C, 0x1E, 0x00 },  // 'q'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xDC, 0x66, 0x60, 0x60, 0x60, 0x60, 0x60, 0xF0, 0x00, 0x00, 0x00, 0x00 },  // 'r'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7C, 0xC6, 0xC0, 0x7C, 0x06, 0x06, 0xC6, 0x7C, 0x00, 0x00, 0x00, 0x00 },  // 's'
++  { 0x00, 0x00, 0x00, 0x10, 0x30, 0x30, 0x30, 0xFC, 0x30, 0x30, 0x30, 0x30, 0x30, 0x36, 0x1C, 0x00, 0x00, 0x00, 0x00 },  // 't'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x76, 0x00, 0x00, 0x00, 0x00 },  // 'u'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x78, 0x30, 0x00, 0x00, 0x00, 0x00 },  // 'v'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xD6, 0xD6, 0xFE, 0xEE, 0x6C, 0x00, 0x00, 0x00, 0x00 },  // 'w'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC6, 0x6C, 0x38, 0x38, 0x6C, 0x6C, 0xC6, 0xC6, 0x00, 0x00, 0x00, 0x00 },  // 'x'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7E, 0x06, 0x0C, 0xF8, 0x00 },  // 'y'
++  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE, 0x86, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0xFE, 0x00, 0x00, 0x00, 0x00 },  // 'z'
++  { 0x00, 0x00, 0x00, 0x0E, 0x18, 0x18, 0x18, 0x18, 0x30, 0x18, 0x18, 0x18, 0x18, 0x18, 0x0E, 0x00, 0x00, 0x00, 0x00 },  // '{'
++  { 0x00, 0x00, 0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00 },  // '|'
++  { 0x00, 0x00, 0x00, 0xE0, 0x30, 0x30, 0x30, 0x30, 0x18, 0x30, 0x30, 0x30, 0x30, 0x30, 0xE0, 0x00, 0x00, 0x00, 0x00 },  // '}'
++  { 0x00, 0x00, 0x00, 0x76, 0xDC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },  // '~'
++};
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c
+new file mode 100644
+index 0000000..d7a0558
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.c
+@@ -0,0 +1,312 @@
++/** @file
++  "GPT (read only)" in UniXNU's Tools menu: every whole disk's GPT, summarised on the panel and in the firmware log, so the
++  owner can see whether UFS LUN 0 has room for an `ipados` partition (hakios-pipa docs/IPADOS-PARTITION.md, design A)
++  without any change to the disk.
++
++  Read only by construction: the only storage call is EFI_BLOCK_IO_PROTOCOL.ReadBlocks (primary header at LBA 1, its entry
++  array, the backup header at the last LBA) on handles whose media is not a logical partition. No WriteBlocks, FlushBlocks,
++  Disk I/O or file system protocol is used (tests/test_gpt_view.py checks the source). The disk holding a partition named
++  "userdata" is shown as LUN 0, the way Android names it on pipa (sda34).
++
++  Copyright (c) 2026, hakios-pipa contributors.
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Uefi.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/MemoryAllocationLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiLib.h>
++#include <Protocol/BlockIo.h>
++#include <Protocol/UniXNUMenuPlugin.h>
++
++#include "GptFont.h"
++#include "GptScan.h"
++
++// tools/gpt_capacity.py need: root 9 457 106 944 + guard 4 MiB + Data window 8 590 200 832 + log reserve 1 GiB
++#define GPT_VIEW_NEED_BYTES  19126026240ULL
++#define GPT_VIEW_MAX_DISKS   16
++#define GPT_VIEW_LINE_CHARS  96
++
++STATIC CONST EFI_GRAPHICS_OUTPUT_BLT_PIXEL  mBackground = { 0x00, 0x00, 0x00, 0x00 };
++STATIC CONST EFI_GRAPHICS_OUTPUT_BLT_PIXEL  mForeground = { 0xE0, 0xE0, 0xE0, 0x00 };
++STATIC CONST EFI_GRAPHICS_OUTPUT_BLT_PIXEL  mAccent     = { 0x40, 0xD0, 0xFF, 0x00 };
++
++STATIC
++GS_U32
++Crc32 (
++  IN CONST VOID  *Data,
++  IN GS_U64      Length
++  )
++{
++  UINT32  Value;
++
++  Value = 0;
++  if (EFI_ERROR (gBS->CalculateCrc32 ((VOID *)Data, (UINTN)Length, &Value))) {
++    return 0;
++  }
++  return Value;
++}
++
++STATIC
++VOID
++Fill (
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL         *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT             *R
++  )
++{
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  Pixel;
++
++  Pixel = mBackground;
++  Gop->Blt (Gop, &Pixel, EfiBltVideoFill, 0, 0, R->X, R->Y, R->Width, R->Height, 0);
++}
++
++// One ASCII line at (X, Y), clipped to the content rectangle; returns the height drawn.
++STATIC
++UINTN
++DrawLine (
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL         *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT             *R,
++  IN UINTN                                Y,
++  IN CONST CHAR8                          *Text,
++  IN UINTN                                Scale,
++  IN EFI_GRAPHICS_OUTPUT_BLT_PIXEL        Color
++  )
++{
++  UINTN                          Len;
++  UINTN                          Cw;
++  UINTN                          Ch;
++  UINTN                          W;
++  UINTN                          Index;
++  UINTN                          Row;
++  UINTN                          Col;
++  UINTN                          Sy;
++  UINTN                          Sx;
++  CONST UINT8                    *Glyph;
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *Buffer;
++
++  Cw  = GPT_VIEW_GLYPH_WIDTH * Scale;
++  Ch  = GPT_VIEW_GLYPH_HEIGHT * Scale;
++  Len = AsciiStrLen (Text);
++  if ((Y + Ch > R->Y + R->Height) || (Len == 0)) {
++    return Ch;
++  }
++  Len = MIN (Len, R->Width / Cw);
++  W   = Len * Cw;
++  if (W == 0) {
++    return Ch;
++  }
++  Buffer = AllocatePool (W * Ch * sizeof (*Buffer));
++  if (Buffer == NULL) {
++    return Ch;
++  }
++  for (Index = 0; Index < W * Ch; Index++) {
++    Buffer[Index] = mBackground;
++  }
++  for (Index = 0; Index < Len; Index++) {
++    CHAR8  C = Text[Index];
++
++    Glyph = gGptViewGlyphs[((C >= 0x20) && (C <= 0x7E)) ? (C - 0x20) : ('?' - 0x20)];
++    for (Row = 0; Row < GPT_VIEW_GLYPH_HEIGHT; Row++) {
++      for (Col = 0; Col < GPT_VIEW_GLYPH_WIDTH; Col++) {
++        if ((Glyph[Row] & (0x80 >> Col)) == 0) {
++          continue;
++        }
++        for (Sy = 0; Sy < Scale; Sy++) {
++          for (Sx = 0; Sx < Scale; Sx++) {
++            Buffer[(Row * Scale + Sy) * W + Index * Cw + Col * Scale + Sx] = Color;
++          }
++        }
++      }
++    }
++  }
++  Gop->Blt (Gop, Buffer, EfiBltBufferToVideo, 0, 0, R->X, Y, W, Ch, 0);
++  FreePool (Buffer);
++  return Ch;
++}
++
++// ReadBlocks into a buffer aligned as the media asks; NULL when the read fails.
++STATIC
++UINT8 *
++ReadAligned (
++  IN  EFI_BLOCK_IO_PROTOCOL  *BlockIo,
++  IN  EFI_LBA                Lba,
++  IN  UINTN                  Bytes,
++  OUT VOID                   **Allocation
++  )
++{
++  UINTN  Align;
++  UINT8  *Raw;
++  UINT8  *Buf;
++
++  Align = MAX (BlockIo->Media->IoAlign, 1);
++  Raw   = AllocateZeroPool (Bytes + Align);
++  if (Raw == NULL) {
++    return NULL;
++  }
++  Buf = (UINT8 *)ALIGN_POINTER (Raw, Align);
++  if (EFI_ERROR (BlockIo->ReadBlocks (BlockIo, BlockIo->Media->MediaId, Lba, Bytes, Buf))) {
++    FreePool (Raw);
++    return NULL;
++  }
++  *Allocation = Raw;
++  return Buf;
++}
++
++STATIC
++VOID
++ScanDisk (
++  IN  EFI_BLOCK_IO_PROTOCOL  *BlockIo,
++  OUT GPT_SCAN_SUMMARY       *Summary
++  )
++{
++  UINT32  BlockSize;
++  UINT64  Blocks;
++  VOID    *HeaderAlloc;
++  VOID    *EntriesAlloc;
++  VOID    *BackupAlloc;
++  UINT8   *Header;
++  UINT8   *Entries;
++  UINT8   *Backup;
++  UINTN   EntryBytes;
++
++  BlockSize = BlockIo->Media->BlockSize;
++  Blocks    = BlockIo->Media->LastBlock + 1;
++  ZeroMem (Summary, sizeof (*Summary));
++  Header = ReadAligned (BlockIo, 1, BlockSize, &HeaderAlloc);
++  if (Header == NULL) {
++    Summary->Flags      = GPT_SCAN_NO_SIGNATURE;
++    Summary->BlockSize  = BlockSize;
++    Summary->DiskBlocks = Blocks;
++    return;
++  }
++  if (GptScanHeader (Header, BlockSize, Blocks, Crc32, Summary) & (GPT_SCAN_NO_SIGNATURE | GPT_SCAN_BAD_HEADER)) {
++    FreePool (HeaderAlloc);
++    return;
++  }
++  FreePool (HeaderAlloc);
++  EntryBytes = (UINTN)((((UINT64)Summary->EntryCount * Summary->EntrySize) + BlockSize - 1) / BlockSize * BlockSize);
++  Entries    = ReadAligned (BlockIo, Summary->EntriesLba, EntryBytes, &EntriesAlloc);
++  Backup     = ReadAligned (BlockIo, Blocks - 1, BlockSize, &BackupAlloc);
++  if (Entries == NULL) {
++    Summary->Flags |= GPT_SCAN_BAD_ENTRIES;
++  } else {
++    GptScanEntries (Entries, EntryBytes, Backup, Crc32, Summary);
++    FreePool (EntriesAlloc);
++  }
++  if (Backup != NULL) {
++    FreePool (BackupAlloc);
++  }
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++GptViewRun (
++  IN UNIXNU_MENU_PLUGIN_PROTOCOL    *This,
++  IN EFI_GRAPHICS_OUTPUT_PROTOCOL   *Gop,
++  IN CONST UNIXNU_PLUGIN_RECT       *Content,
++  IN UNIXNU_MENU_PLUGIN_DRAW_STATUS DrawStatus
++  )
++{
++  EFI_STATUS             Status;
++  EFI_HANDLE             *Handles;
++  UINTN                  Count;
++  UINTN                  Index;
++  UINTN                  Shown;
++  UINTN                  Pass;
++  UINTN                  Y;
++  UINTN                  Scale;
++  UINTN                  Signaled;
++  EFI_INPUT_KEY          Key;
++  EFI_BLOCK_IO_PROTOCOL  *BlockIo;
++  GPT_SCAN_SUMMARY       *Summaries;
++  CHAR8                  Line[GPT_VIEW_LINE_CHARS];
++  unsigned               L;
++
++  if ((Gop == NULL) || (Content == NULL) || (Content->Width == 0) || (Content->Height == 0)) {
++    return EFI_INVALID_PARAMETER;
++  }
++  Fill (Gop, Content);
++  Scale = (Content->Width >= 72 * GPT_VIEW_GLYPH_WIDTH * 2) ? 2 : 1;
++  Y     = Content->Y;
++  Y    += DrawLine (Gop, Content, Y, "GPT (read only) -- nothing is written. Enter/Power: back", Scale, mAccent);
++
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &Count, &Handles);
++  if (EFI_ERROR (Status)) {
++    DrawLine (Gop, Content, Y, "no block devices", Scale, mForeground);
++    Count   = 0;
++    Handles = NULL;
++  }
++  Summaries = AllocateZeroPool (GPT_VIEW_MAX_DISKS * sizeof (*Summaries));
++  Shown     = 0;
++  for (Index = 0; (Summaries != NULL) && (Index < Count) && (Shown < GPT_VIEW_MAX_DISKS); Index++) {
++    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo)) ||
++        (BlockIo->Media == NULL) || BlockIo->Media->LogicalPartition || !BlockIo->Media->MediaPresent ||
++        (BlockIo->Media->BlockSize < 512) || (BlockIo->Media->BlockSize > 4096) || (BlockIo->Media->LastBlock < 64))
++    {
++      continue;
++    }
++    ScanDisk (BlockIo, &Summaries[Shown]);
++    if ((Summaries[Shown].Flags & GPT_SCAN_NO_SIGNATURE) == 0) {
++      Shown++;
++    }
++  }
++  // LUN 0 (the disk with userdata) first, in full; then one line for every other disk with a GPT
++  for (Pass = 0; Pass < 2; Pass++) {
++    for (Index = 0; Index < Shown; Index++) {
++      if ((Summaries[Index].HasUserdata != 0) != (Pass == 0)) {
++        continue;
++      }
++      for (L = 0; GptScanLine (&Summaries[Index], GPT_VIEW_NEED_BYTES, L, Line, sizeof (Line)); L++) {
++        DEBUG ((DEBUG_ERROR, "GPTVIEW: disk %u: %a\n", (UINT32)Index, Line));
++        if ((Pass == 0) || (L == 0)) {
++          Y += DrawLine (Gop, Content, Y, Line, Scale, (Pass == 0) && (L == 4) ? mAccent : mForeground);
++        }
++      }
++      if (Pass == 0) {
++        Y += GPT_VIEW_GLYPH_HEIGHT * Scale / 2;
++      }
++    }
++  }
++  if (DrawStatus != NULL) {
++    DrawStatus (This, 0, L"GPT survey: read only");
++  }
++  if (Summaries != NULL) {
++    FreePool (Summaries);
++  }
++  if (Handles != NULL) {
++    FreePool (Handles);
++  }
++  while (gST->ConIn != NULL) {
++    if (EFI_ERROR (gBS->WaitForEvent (1, &gST->ConIn->WaitForKey, &Signaled))) {
++      break;
++    }
++    if (EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
++      continue;
++    }
++    if ((Key.UnicodeChar == CHAR_CARRIAGE_RETURN) || (Key.UnicodeChar == CHAR_LINEFEED) || (Key.ScanCode == SCAN_ESC)) {
++      break;
++    }
++  }
++  return EFI_SUCCESS;
++}
++
++STATIC UNIXNU_MENU_PLUGIN_PROTOCOL  mGptViewPlugin = {
++  UNIXNU_MENU_PLUGIN_PROTOCOL_SIGNATURE,
++  UNIXNU_MENU_PLUGIN_PROTOCOL_VERSION,
++  L"GPT (read only)",
++  GptViewRun
++};
++
++EFI_STATUS
++EFIAPI
++GptViewDxeEntry (
++  IN EFI_HANDLE        ImageHandle,
++  IN EFI_SYSTEM_TABLE  *SystemTable
++  )
++{
++  (VOID)SystemTable;
++  return gBS->InstallProtocolInterface (&ImageHandle, &gUniXNUMenuPluginProtocolGuid, EFI_NATIVE_INTERFACE, &mGptViewPlugin);
++}
+diff --git a/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf
+new file mode 100644
+index 0000000..9c711b8
+--- /dev/null
++++ b/package/UniXNUPkg/Driver/GptViewDxe/GptViewDxe.inf
+@@ -0,0 +1,43 @@
++## @file
++#  Publishes a UniXNU menu plugin, "GPT (read only)", that summarises every whole disk's GPT (primary and backup header,
++#  entry CRCs, free ranges) on the panel and in the log. The only storage call is BlockIo ReadBlocks.
++#  hakios-pipa docs/IPADOS-PARTITION.md.
++#
++#  Copyright (c) 2026, hakios-pipa contributors.
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++##
++
++[Defines]
++  INF_VERSION    = 0x00010019
++  BASE_NAME      = GptViewDxe
++  FILE_GUID      = 5B2E9C41-7D3A-4F18-A6C2-2E9F1B4D7A63
++  MODULE_TYPE    = DXE_DRIVER
++  VERSION_STRING = 0.1
++  ENTRY_POINT    = GptViewDxeEntry
++
++[Sources]
++  GptViewDxe.c
++  GptScan.c
++  GptScan.h
++  GptFont.c
++  GptFont.h
++
++[Packages]
++  MdePkg/MdePkg.dec
++  UniXNUPkg/UniXNUPkg.dec
++
++[LibraryClasses]
++  BaseLib
++  BaseMemoryLib
++  DebugLib
++  MemoryAllocationLib
++  UefiBootServicesTableLib
++  UefiDriverEntryPoint
++  UefiLib
++
++[Protocols]
++  gEfiBlockIoProtocolGuid           ## CONSUMES
++  gUniXNUMenuPluginProtocolGuid     ## PRODUCES
++
++[Depex]
++  TRUE

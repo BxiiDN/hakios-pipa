@@ -21,6 +21,7 @@ on:
       - UPSTREAM
       - patches/unixnu/**
       - patches/unixnu-pipa/**
+      - patches/uefi-pipa/**
       - owner/owner-public.pem
       - scripts/fetch-unixnu.sh
       - scripts/lib.sh

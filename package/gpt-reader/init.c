@@ -6,7 +6,8 @@
 // the previous system left there under /sys/fs/pstore. This program copies those files, this kernel's own log and its command
 // line into LOG.BIN of the FAT image /log.img, writes a marker with this boot's id into pmsg and the kernel log, and offers the
 // image read only as a USB mass storage disk; STATUS.TXT in the same image says what it did. When the host ejects the disk, or
-// after TIMEOUT_S, it restarts into fastboot: a warm reset when the reader's device tree has qcom,force-warm-reboot, so the next
+// after TIMEOUT_S, the log reader restarts into fastboot (the GPT reader, -DREADER_GPT, powers off once the USB cable is out
+// instead): a warm reset when the reader's device tree has qcom,force-warm-reboot, so the next
 // reader finds this one's marker if the memory survives the way back. Static and libc-free; nothing on UFS is read or written.
 // Adapted from the TB128FU reader (UniXNU-tb128fu package/linux-log/init.c).
 

@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 13, 24 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 15, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -9,6 +9,17 @@ Dua status terpisah, tidak pernah disamakan:
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
 
+## Sesi 15 (offline; tidak ada boot, flash, reboot, atau tulisan ke tablet)
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| Image ROM port terpasang | **tidak ditemukan** di Windows/WSL; satu-satunya boot/vendor_boot/dtbo (Downloads, 19 Nov) = kernel 4.19.325, `rom_match.py` FAIL |
+| Plugin UEFI "GPT (read only)" | `patches/unixnu/0007` + `patches/uefi-pipa/0001` (diterapkan `fetch-unixnu.sh`); hanya `ReadBlocks`; firmware build lokal PASS (FD `bf7e98f0…`); image MODE A uji `a8d40a90…` konsisten; **belum dijalankan** |
+| Dokumentasi pembaca Linux | disesuaikan: berakhir power-off setelah kabel dicabut, tidak `fastboot reboot` |
+| Tes | 193 OK (4 dilewati) |
+
+Rincian: [IPADOS-PARTITION.md](IPADOS-PARTITION.md) bagian 9.
+
 ## Sesi 13 (persiapan partisi `ipados`; adb read-only; tidak ada boot, flash, atau tulisan GPT)
 
 Rincian: [IPADOS-PARTITION.md](IPADOS-PARTITION.md).
@@ -16,7 +27,7 @@ Rincian: [IPADOS-PARTITION.md](IPADOS-PARTITION.md).
 | Pemeriksaan | Hasil |
 | --- | --- |
 | GPT dari Android tanpa root | hanya nama (`/dev/block/by-name`); ukuran/offset dan descriptor UFS ditolak SELinux. Ruang kosong LUN 0 **belum terukur** |
-| Pembaca GPT read-only dari RAM | `package/gpt-reader` dibangun (`a7fa37bb…`, privat); audit sumber: disk `O_RDONLY` + `BLKROSET`, tulisan hanya ke RAM. **Belum dijalankan** (butuh persetujuan: tablet di-restart ke fastboot) |
+| Pembaca GPT read-only dari RAM | `package/gpt-reader` (image sesi 13 `a7fa37bb…` dinyatakan tidak layak di sesi 14: kernel 4.19, bukan ROM terpasang); audit sumber: disk `O_RDONLY` + `BLKROSET`, tulisan hanya ke RAM, berakhir power-off. **Belum dijalankan** (butuh persetujuan: tablet di-restart ke fastboot) |
 | Kebutuhan `ipados` | minimum 19 126 026 240 B (17,81 GiB); disarankan 20 GiB; hanya di LUN 0 (`findRootLayout`) |
 | Rancangan | A (ruang kosong, tanpa sentuh data): `plans/ipados-free-space.json`; B (kecilkan `userdata` = hapus data): `plans/ipados-shrink-userdata.json`, FAIL sampai dua persetujuan |
 | Alat | `tools/gpt_capacity.py`; tes `test_gpt_capacity.py`, `test_gpt_reader_source.py`, `test_ipados_plans.py` |
