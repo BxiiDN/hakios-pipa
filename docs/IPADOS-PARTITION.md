@@ -1,6 +1,6 @@
-# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–15)
+# Partisi `ipados` — kebutuhan, pemeriksaan read-only, rancangan, backup dan pemulihan (sesi 13–16)
 
-**Status: belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
+**Status (24 Nov, terukur di tablet): LUN 0 tidak punya ruang kosong; Rancangan A tidak mungkin. Belum ada partisi `ipados`, dan belum ada satu pun tulisan ke GPT.** Dokumen ini rencana; setiap langkah yang
 menulis ke tablet butuh persetujuan khusus pemilik, terpisah per langkah. `userdata` dan `metadata` tidak dikecilkan,
 diformat, atau dihapus oleh apa pun di repo ini.
 
@@ -215,3 +215,60 @@ Rencana uji (butuh persetujuan terpisah; tidak menulis UFS): `fastboot boot` ima
 only) → foto layar → kembali → **Power off** dari menu (bukan Restart/`fastboot reboot`) → nyalakan dengan Power →
 Android. Risiko yang tersisa: `pipa.dtb` khusus papan (`board-id 0x34`) diharapkan "Exact DTB match" sehingga `dtbo_b`
 port dilewati — belum dibuktikan pada ROM port ini; bila ABL menolak, pemulihannya seperti bagian 6.
+
+## 10. Sesi 16: GPT LUN 0 terbaca di hardware nyata
+
+### Bukti (plugin "GPT (read only)", `fastboot boot` image `a8d40a90…`, 24 Nov; foto di tangan pemilik)
+
+| Baris di layar | Nilai |
+| --- | --- |
+| LUN 0 | 241 720 MiB, blok 4096 B, 34 partisi |
+| Usable LBA | 6..61 880 314 |
+| Partisi terakhir | `userdata`, berakhir di LBA 61 880 314 |
+| Ruang kosong | 0 MiB |
+| Pemeriksaan | entri OK, cadangan OK, tidak ada tumpang tindih |
+| `ipados` | tidak ada; butuh 18 240 MiB → **no room without resizing userdata** |
+
+Pemeriksaan silang (`tests/test_measured_lun0.py`, tata letak `tests/data/pipa-lun0-layout.json`): urutan `by-name` +
+ukuran `fastboot getvar partition-size` dari LBA 6 tanpa celah menempatkan `userdata` tepat di `0x293000..0x3b037fa`
+(= `board.toml`, diukur 16 Nov) dan jumlah 34 partisi = 241 720,0 MiB = seluruh area usable. Tiga sumber independen
+(GPT di firmware, `getvar`, rekaman lama) sepakat. Setelah uji: slot `b` successful=yes, unbootable=no, retry 6.
+
+**Rancangan A: tidak mungkin** (`pipa_gpt.py check` → BLOCKED pada tabel ini).
+
+### Alternatif tanpa menghapus data Android (audit)
+
+| Alternatif | Kapasitas / syarat | Penilaian |
+| --- | --- | --- |
+| Ruang kosong GPT LUN 0 | 0 MiB (terukur) | tidak |
+| Partisi kecil yang mungkin tak terpakai (`rawdump` 128, `cust` 1024, `rescue` 128, `minidump` 96, `logdump` 64, `bk0x` ±90 MiB) | jumlah < 2 GiB, tidak bersebelahan, sebagian dipakai Xiaomi | tidak |
+| `super` | 8 704 MiB total, berisi Android (partisi dinamis + Virtual A/B) | tidak |
+| LUN 1–5 | kecil (partisi boot/firmware); kernel hanya membaca LUN 0 (`findRootLayout`) | tidak |
+| File di `/data` | f2fs di atas dm-default-key (kunci terikat TEE): blok mentah ciphertext bagi XNU | tidak |
+| Kecilkan root (seed Data lebih kecil, butuh macOS) | root 9,46 GB tetap butuh ruang yang tidak ada | tidak membantu |
+| Root di RAM | 8 GB RAM < root 9,46 GB | tidak |
+| Kecilkan f2fs `userdata` di tempat | tidak ada alat yang bisa: f2fs tidak menyusut online; offline butuh kunci metadata perangkat (hanya vold Android) | tidak |
+| **Drive USB-C eksternal** | kernelcache iPadOS membawa tumpukan USB host Apple; DWC3 SM8250 punya mode host xHCI; port ini hanya punya gadget (diagnostik). Butuh: mode host + PHY + VBUS (PMIC), node ADT, pengikatan driver XHCI, lalu root di drive; tablet harus memakai drive (dan hub berdaya) setiap boot iPadOS | **satu-satunya jalan tanpa hapus data**; riset besar, belum ada bukti kelayakan |
+
+Kesimpulan: dengan perangkat ini sekarang, root iPadOS internal **hanya** bisa lewat Rancangan B (mengecilkan
+`userdata` = format `userdata` + `metadata`). Jalan tanpa kehilangan data hanya drive USB-C, sebagai proyek riset.
+
+### Rancangan B, angka untuk tabel ini (tidak ditulis)
+
+`ipados` = LBA 56 637 184..61 880 314 (rata 1 MiB, 21 475 864 576 B ≥ 19 126 026 240); `userdata` = 0x293000..56 637 183
+(220,93 GB untuk Android). Hanya dua entri GPT berubah; partisi lain tidak bergeser.
+
+### Prasyarat sebelum Rancangan B boleh diusulkan untuk disetujui (semua belum terpenuhi)
+
+| # | Prasyarat | Alat / status |
+| --- | --- | --- |
+| 1 | Backup data pengguna di PC, terverifikasi | `scripts/backup-android.sh backup DIR` lalu `verify DIR` (disiapkan, **belum dijalankan**: butuh persetujuan karena menyalin data pribadi); ditambah backup HyperOS bawaan (masuk lewat `/sdcard`), Google/Mi Cloud, ekspor tiap aplikasi (chat, authenticator) |
+| 2 | Uji pulih satu kali | pulihkan satu aplikasi dari backup HyperOS + buka beberapa file dari salinan PC |
+| 3 | Paket ROM port yang terpasang (`boot`, `vendor_boot`, `dtbo`, `vbmeta*`, `super`/image partisi) | **tidak ada** di mesin ini: harus didapat dari porter; tanpa itu Android tidak bisa dipasang ulang bila first boot setelah format gagal |
+| 4 | Dump GPT mentah LUN 0 (primer + cadangan) untuk mengembalikan tabel | plugin hanya menampilkan; perlu fitur ekspor read-only (mis. QR, seperti plugin Advanced Logger) — belum dibuat |
+| 5 | Alat penulis GPT yang hanya mengubah dua entri dan dicek ulang byte demi byte | belum dibuat (sengaja) |
+| 6 | Persetujuan pemilik: `userdata_erase_confirmed` dan `backup_verified` | `pipa_gpt.py` tetap FAIL sampai keduanya |
+
+Pemulihan bila B gagal: GPT lama dari dump (#4) lewat `fastboot flash partition:0`, lalu format `userdata` dan
+first boot Android dengan ROM port yang sama (#3), lalu pulihkan backup (#1). Fastboot (ABL) tidak tersentuh oleh semua
+langkah ini.

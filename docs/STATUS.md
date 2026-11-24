@@ -1,4 +1,4 @@
-# Status verifikasi — hakios-pipa (sesi 15, 24 Nov 2026)
+# Status verifikasi — hakios-pipa (sesi 16, 24 Nov 2026)
 
 Basis iPadOS 17: UniXNU `62f203c` (sesi 4, sebelumnya `8542980`; alasan di [XNU-BUILD.md](XNU-BUILD.md)) + EsaiJJ/UniXNU-pipa
 `c4c1a3a` + patch hakios-pipa 0001–0003 (XNU `10063.141.1`).
@@ -8,6 +8,17 @@ Dua status terpisah, tidak pernah disamakan:
 - **READY FOR HARDWARE BOOT** (`scripts/readiness.sh`): **NO** — sesi 11–12: hanya image root partisi `ipados` yang belum ada
   (kernel, firmware, payload, boot image, anchor owner ada dan konsisten); hardware preflight (identitas, GPT, root target, firmware, panel, backup, alat pemulihan) belum
   diverifikasi. **Tablet tidak boleh di-boot.**
+
+## Sesi 16 (GPT LUN 0 terbaca di tablet lewat plugin UEFI; hanya `fastboot boot` RAM, disetujui pemilik)
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| GPT LUN 0 (hardware) | 241 720 MiB, 34 partisi, usable 6..61 880 314, `userdata` terakhir sampai 61 880 314, **ruang kosong 0 MiB**, entri/cadangan OK, `ipados` tidak ada |
+| Pemeriksaan silang | `by-name` + `getvar` + `board.toml` sepakat (`tests/test_measured_lun0.py`) |
+| Rancangan A | **tidak mungkin** |
+| Alternatif tanpa hapus data | tidak ada di penyimpanan internal; drive USB-C eksternal = riset |
+| Rancangan B | angka dihitung (Android tetap 220,93 GB); 6 prasyarat belum terpenuhi, termasuk paket ROM port dan dump GPT mentah |
+| Backup | `scripts/backup-android.sh` disiapkan (read-only di tablet, manifest SHA-256), **belum dijalankan** |
 
 ## Sesi 15 (offline; tidak ada boot, flash, reboot, atau tulisan ke tablet)
 

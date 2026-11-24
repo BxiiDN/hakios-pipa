@@ -1,0 +1,246 @@
+{
+ "source": "Xiaomi Pad 6 (pipa, 8 GB/256 GB), UFS LUN 0, 2026-11-24: partition order from /dev/block/by-name (adb, read only), sizes from fastboot getvar partition-size; first usable LBA 6 and last usable LBA 61880314 from the GPT (read only) UEFI plugin on the tablet. Contiguous placement is inferred, and is consistent with the plugin (free 0 MiB, no overlap) and board.toml userdata 0x293000..0x3b037fa.",
+ "sector": 4096,
+ "first_usable_lba": 6,
+ "last_usable_lba": 61880314,
+ "partitions": [
+  {
+   "number": 1,
+   "name": "switch",
+   "bytes": 8192,
+   "first_lba": 6,
+   "last_lba": 7
+  },
+  {
+   "number": 2,
+   "name": "ssd",
+   "bytes": 32768,
+   "first_lba": 8,
+   "last_lba": 15
+  },
+  {
+   "number": 3,
+   "name": "dbg",
+   "bytes": 32768,
+   "first_lba": 16,
+   "last_lba": 23
+  },
+  {
+   "number": 4,
+   "name": "bk01",
+   "bytes": 32768,
+   "first_lba": 24,
+   "last_lba": 31
+  },
+  {
+   "number": 5,
+   "name": "bk02",
+   "bytes": 131072,
+   "first_lba": 32,
+   "last_lba": 63
+  },
+  {
+   "number": 6,
+   "name": "bk03",
+   "bytes": 262144,
+   "first_lba": 64,
+   "last_lba": 127
+  },
+  {
+   "number": 7,
+   "name": "bk04",
+   "bytes": 524288,
+   "first_lba": 128,
+   "last_lba": 255
+  },
+  {
+   "number": 8,
+   "name": "keystore",
+   "bytes": 524288,
+   "first_lba": 256,
+   "last_lba": 383
+  },
+  {
+   "number": 9,
+   "name": "frp",
+   "bytes": 524288,
+   "first_lba": 384,
+   "last_lba": 511
+  },
+  {
+   "number": 10,
+   "name": "countrycode",
+   "bytes": 2097152,
+   "first_lba": 512,
+   "last_lba": 1023
+  },
+  {
+   "number": 11,
+   "name": "misc",
+   "bytes": 4194304,
+   "first_lba": 1024,
+   "last_lba": 2047
+  },
+  {
+   "number": 12,
+   "name": "bk06",
+   "bytes": 8388608,
+   "first_lba": 2048,
+   "last_lba": 4095
+  },
+  {
+   "number": 13,
+   "name": "logfs",
+   "bytes": 8388608,
+   "first_lba": 4096,
+   "last_lba": 6143
+  },
+  {
+   "number": 14,
+   "name": "ffu",
+   "bytes": 8388608,
+   "first_lba": 6144,
+   "last_lba": 8191
+  },
+  {
+   "number": 15,
+   "name": "oops",
+   "bytes": 16777216,
+   "first_lba": 8192,
+   "last_lba": 12287
+  },
+  {
+   "number": 16,
+   "name": "devinfo",
+   "bytes": 16777216,
+   "first_lba": 12288,
+   "last_lba": 16383
+  },
+  {
+   "number": 17,
+   "name": "oem_misc1",
+   "bytes": 1048576,
+   "first_lba": 16384,
+   "last_lba": 16639
+  },
+  {
+   "number": 18,
+   "name": "metadata",
+   "bytes": 67108864,
+   "first_lba": 16640,
+   "last_lba": 33023
+  },
+  {
+   "number": 19,
+   "name": "bk08",
+   "bytes": 15728640,
+   "first_lba": 33024,
+   "last_lba": 36863
+  },
+  {
+   "number": 20,
+   "name": "splash",
+   "bytes": 33554432,
+   "first_lba": 36864,
+   "last_lba": 45055
+  },
+  {
+   "number": 21,
+   "name": "bk09",
+   "bytes": 33554432,
+   "first_lba": 45056,
+   "last_lba": 53247
+  },
+  {
+   "number": 22,
+   "name": "persist",
+   "bytes": 67108864,
+   "first_lba": 53248,
+   "last_lba": 69631
+  },
+  {
+   "number": 23,
+   "name": "persistbak",
+   "bytes": 67108864,
+   "first_lba": 69632,
+   "last_lba": 86015
+  },
+  {
+   "number": 24,
+   "name": "mtdblk",
+   "bytes": 33554432,
+   "first_lba": 86016,
+   "last_lba": 94207
+  },
+  {
+   "number": 25,
+   "name": "logdump",
+   "bytes": 67108864,
+   "first_lba": 94208,
+   "last_lba": 110591
+  },
+  {
+   "number": 26,
+   "name": "minidump",
+   "bytes": 100663296,
+   "first_lba": 110592,
+   "last_lba": 135167
+  },
+  {
+   "number": 27,
+   "name": "rawdump",
+   "bytes": 134217728,
+   "first_lba": 135168,
+   "last_lba": 167935
+  },
+  {
+   "number": 28,
+   "name": "cust",
+   "bytes": 1073741824,
+   "first_lba": 167936,
+   "last_lba": 430079
+  },
+  {
+   "number": 29,
+   "name": "super",
+   "bytes": 9126805504,
+   "first_lba": 430080,
+   "last_lba": 2658303
+  },
+  {
+   "number": 30,
+   "name": "vbmeta_system_a",
+   "bytes": 131072,
+   "first_lba": 2658304,
+   "last_lba": 2658335
+  },
+  {
+   "number": 31,
+   "name": "vbmeta_system_b",
+   "bytes": 131072,
+   "first_lba": 2658336,
+   "last_lba": 2658367
+  },
+  {
+   "number": 32,
+   "name": "bk010",
+   "bytes": 33292288,
+   "first_lba": 2658368,
+   "last_lba": 2666495
+  },
+  {
+   "number": 33,
+   "name": "rescue",
+   "bytes": 134217728,
+   "first_lba": 2666496,
+   "last_lba": 2699263
+  },
+  {
+   "number": 34,
+   "name": "userdata",
+   "bytes": 242405584896,
+   "first_lba": 2699264,
+   "last_lba": 61880314
+  }
+ ]
+}
